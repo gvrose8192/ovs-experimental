@@ -681,9 +681,9 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
 
   OVS_GREP_IFELSE([$KSRC/include/net/vxlan.h], [struct vxlan_metadata],
                   [OVS_DEFINE([HAVE_VXLAN_METADATA])])
-  OVS_GREP_IFELSE([$KSRC/include/net/udp.h], [udp_flow_src_port])
-  OVS_GREP_IFELSE([$KSRC/include/net/udp.h], [inet_get_local_port_range(net)],
-                                   [OVS_DEFINE([HAVE_UDP_FLOW_SRC_PORT])])
+  OVS_GREP_IFELSE([$KSRC/include/net/udp.h], [udp_flow_src_port],
+                  [OVS_GREP_IFELSE([$KSRC/include/net/udp.h], [inet_get_local_port_range(net],
+                                   [OVS_DEFINE([HAVE_UDP_FLOW_SRC_PORT])])])
   OVS_GREP_IFELSE([$KSRC/include/net/udp.h], [udp_v4_check])
   OVS_GREP_IFELSE([$KSRC/include/net/udp_tunnel.h], [udp_tunnel_gro_complete])
   OVS_GREP_IFELSE([$KSRC/include/net/udp_tunnel.h], [sk_buff.*udp_tunnel_handle_offloads],
