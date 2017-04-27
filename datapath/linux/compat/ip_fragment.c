@@ -729,18 +729,32 @@ int rpl_ip_defrag(struct net *net, struct sk_buff *skb, u32 user)
 	return -ENOMEM;
 }
 
+#if DEFRAG_ENABLE_TAKES_NET
+static int __net_init ipv4_frags_init_net(struct net *net)
+{
+	nf_defrag_ipv4_enable(net);
+
+	return 0;
+}
+#endif
+
 static void __net_exit ipv4_frags_exit_net(struct net *net)
 {
 	inet_frags_exit_net(&net->ipv4.frags, &ip4_frags);
 }
 
 static struct pernet_operations ip4_frags_ops = {
+#if DEFRAG_ENABLE_TAKES_NET
+	.init = ipv4_frags_init_net,
+#endif
 	.exit = ipv4_frags_exit_net,
 };
 
 int __init rpl_ipfrag_init(void)
 {
+#ifndef DEFRAG_ENABLE_TAKES_NET
 	nf_defrag_ipv4_enable();
+#endif
 	register_pernet_subsys(&ip4_frags_ops);
 	ip4_frags.hashfn = ip4_hashfn;
 	ip4_frags.constructor = ip4_frag_init;
