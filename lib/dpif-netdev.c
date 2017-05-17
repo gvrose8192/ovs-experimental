@@ -260,7 +260,6 @@ struct dp_netdev {
     /* Meters. */
     struct ovs_mutex meter_locks[N_METER_LOCKS];
     struct dp_meter *meters[MAX_METERS]; /* Meter bands. */
-    uint32_t meter_free;                 /* Next free meter. */
 
     /* Protects access to ofproto-dpif-upcall interface during revalidator
      * thread synchronization. */
@@ -3896,9 +3895,6 @@ dpif_netdev_meter_set(struct dpif *dpif, ofproto_meter_id *meter_id,
     struct dp_meter *meter;
     int i;
 
-    if (mid == UINT32_MAX) {
-        mid = dp->meter_free;
-    }
     if (mid >= MAX_METERS) {
         return EFBIG; /* Meter_id out of range. */
     }
@@ -3958,21 +3954,6 @@ dpif_netdev_meter_set(struct dpif *dpif, ofproto_meter_id *meter_id,
         dp->meters[mid] = meter;
         meter_unlock(dp, mid);
 
-        meter_id->uint32 = mid; /* Store on success. */
-
-        /* Find next free meter */
-        if (dp->meter_free == mid) { /* Now taken. */
-            do {
-                if (++mid >= MAX_METERS) { /* Wrap around */
-                    mid = 0;
-                }
-                if (mid == dp->meter_free) { /* Full circle */
-                    mid = MAX_METERS;
-                    break;
-                }
-            } while (dp->meters[mid]);
-            dp->meter_free = mid; /* Next free meter or MAX_METERS */
-        }
         return 0;
     }
     return ENOMEM;
@@ -4027,11 +4008,6 @@ dpif_netdev_meter_del(struct dpif *dpif,
         meter_lock(dp, meter_id);
         dp_delete_meter(dp, meter_id);
         meter_unlock(dp, meter_id);
-
-        /* Keep free meter index as low as possible */
-        if (meter_id < dp->meter_free) {
-            dp->meter_free = meter_id;
-        }
     }
     return error;
 }
@@ -4398,8 +4374,7 @@ dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
 
         ofpbuf_init(&key, 0);
         odp_flow_key_from_flow(&odp_parms, &key);
-        packet_str = ofp_packet_to_string(dp_packet_data(packet_),
-                                          dp_packet_size(packet_));
+        packet_str = ofp_dp_packet_to_string(packet_);
 
         odp_flow_key_format(key.data, key.size, &ds);
 
@@ -4995,8 +4970,24 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 
     case OVS_ACTION_ATTR_TUNNEL_PUSH:
         if (*depth < MAX_RECIRC_DEPTH) {
+            struct dp_packet_batch tnl_pkt;
+            struct dp_packet_batch *orig_packets_ = packets_;
+            int err;
+
+            if (!may_steal) {
+                dp_packet_batch_clone(&tnl_pkt, packets_);
+                packets_ = &tnl_pkt;
+                dp_packet_batch_reset_cutlen(orig_packets_);
+            }
+
             dp_packet_batch_apply_cutlen(packets_);
-            push_tnl_action(pmd, a, packets_);
+
+            err = push_tnl_action(pmd, a, packets_);
+            if (!err) {
+                (*depth)++;
+                dp_netdev_recirculate(pmd, packets_);
+                (*depth)--;
+            }
             return;
         }
         break;

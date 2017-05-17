@@ -51,6 +51,7 @@
 #include "hmapx.h"
 #include "odp-util.h"
 #include "openvswitch/ofp-util.h"
+#include "id-pool.h"
 #include "ovs-thread.h"
 #include "ofproto-provider.h"
 #include "util.h"
@@ -174,7 +175,10 @@ struct group_dpif *group_dpif_lookup(struct ofproto_dpif *,
     DPIF_SUPPORT_FIELD(bool, clone, "Clone action")                         \
                                                                             \
     /* Maximum level of nesting allowed by OVS_ACTION_ATTR_SAMPLE action. */\
-    DPIF_SUPPORT_FIELD(size_t, sample_nesting, "Sample nesting")
+    DPIF_SUPPORT_FIELD(size_t, sample_nesting, "Sample nesting")            \
+                                                                            \
+    /* OVS_CT_ATTR_EVENTMASK supported by OVS_ACTION_ATTR_CT action. */     \
+    DPIF_SUPPORT_FIELD(bool, ct_eventmask, "Conntrack eventmask")
 
 /* Stores the various features which the corresponding backer supports. */
 struct dpif_backer_support {
@@ -220,6 +224,9 @@ struct dpif_backer {
     enum revalidate_reason need_revalidate; /* Revalidate all flows. */
 
     bool recv_set_enable; /* Enables or disables receiving packets. */
+
+    /* Meter. */
+    struct id_pool *meter_ids;     /* Datapath meter allocation. */
 
     /* Version string of the datapath stored in OVSDB. */
     char *dp_version_string;

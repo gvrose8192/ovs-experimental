@@ -51,7 +51,7 @@ static void
 odp_eth_set_addrs(struct dp_packet *packet, const struct ovs_key_ethernet *key,
                   const struct ovs_key_ethernet *mask)
 {
-    struct eth_header *eh = dp_packet_l2(packet);
+    struct eth_header *eh = dp_packet_eth(packet);
 
     if (eh) {
         if (!mask) {
@@ -233,33 +233,33 @@ odp_set_nd(struct dp_packet *packet, const struct ovs_key_nd *key,
            const struct ovs_key_nd *mask)
 {
     const struct ovs_nd_msg *ns = dp_packet_l4(packet);
-    const struct ovs_nd_opt *nd_opt = dp_packet_get_nd_payload(packet);
+    const struct ovs_nd_lla_opt *lla_opt = dp_packet_get_nd_payload(packet);
 
-    if (OVS_LIKELY(ns && nd_opt)) {
+    if (OVS_LIKELY(ns && lla_opt)) {
         int bytes_remain = dp_packet_l4_size(packet) - sizeof(*ns);
         struct in6_addr tgt_buf;
         struct eth_addr sll_buf = eth_addr_zero;
         struct eth_addr tll_buf = eth_addr_zero;
 
-        while (bytes_remain >= ND_OPT_LEN && nd_opt->nd_opt_len != 0) {
-            if (nd_opt->nd_opt_type == ND_OPT_SOURCE_LINKADDR
-                && nd_opt->nd_opt_len == 1) {
-                sll_buf = nd_opt->nd_opt_mac;
+        while (bytes_remain >= ND_LLA_OPT_LEN && lla_opt->len != 0) {
+            if (lla_opt->type == ND_OPT_SOURCE_LINKADDR
+                && lla_opt->len == 1) {
+                sll_buf = lla_opt->mac;
                 ether_addr_copy_masked(&sll_buf, key->nd_sll, mask->nd_sll);
 
                 /* A packet can only contain one SLL or TLL option */
                 break;
-            } else if (nd_opt->nd_opt_type == ND_OPT_TARGET_LINKADDR
-                       && nd_opt->nd_opt_len == 1) {
-                tll_buf = nd_opt->nd_opt_mac;
+            } else if (lla_opt->type == ND_OPT_TARGET_LINKADDR
+                       && lla_opt->len == 1) {
+                tll_buf = lla_opt->mac;
                 ether_addr_copy_masked(&tll_buf, key->nd_tll, mask->nd_tll);
 
                 /* A packet can only contain one SLL or TLL option */
                 break;
             }
 
-            nd_opt += nd_opt->nd_opt_len;
-            bytes_remain -= nd_opt->nd_opt_len * ND_OPT_LEN;
+            lla_opt += lla_opt->len;
+            bytes_remain -= lla_opt->len * ND_LLA_OPT_LEN;
         }
 
         packet_set_nd(packet,
@@ -732,6 +732,21 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         case OVS_ACTION_ATTR_METER:
             /* Not implemented yet. */
             break;
+        case OVS_ACTION_ATTR_PUSH_ETH: {
+            const struct ovs_action_push_eth *eth = nl_attr_get(a);
+
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                push_eth(packet, &eth->addresses.eth_dst,
+                         &eth->addresses.eth_src);
+            }
+            break;
+        }
+
+        case OVS_ACTION_ATTR_POP_ETH:
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                pop_eth(packet);
+            }
+            break;
 
         case OVS_ACTION_ATTR_OUTPUT:
         case OVS_ACTION_ATTR_TUNNEL_PUSH:
@@ -739,8 +754,6 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         case OVS_ACTION_ATTR_USERSPACE:
         case OVS_ACTION_ATTR_RECIRC:
         case OVS_ACTION_ATTR_CT:
-        case OVS_ACTION_ATTR_PUSH_ETH:
-        case OVS_ACTION_ATTR_POP_ETH:
         case OVS_ACTION_ATTR_UNSPEC:
         case __OVS_ACTION_ATTR_MAX:
             OVS_NOT_REACHED();

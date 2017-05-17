@@ -1466,7 +1466,7 @@ This flag was added in Open vSwitch 2.4.
 .IP \fBlimit=\fInumber\fR
 If the number of flows in table \fBtable\fR with cookie id \fBcookie\fR exceeds
 \fInumber\fR, a new flow will not be learned by this action.  By default
-there's no limit.
+there's no limit. limit=0 is a long-hand for no limit.
 .
 .IP
 This flag was added in Open vSwitch 2.8.
@@ -2245,8 +2245,10 @@ format.
 .IP "\fBOXM-OpenFlow12\fR"
 .IQ "\fBOXM-OpenFlow13\fR"
 .IQ "\fBOXM-OpenFlow14\fR"
+.IQ "\fBOXM-OpenFlow15\fR"
+.IQ "\fBOXM-OpenFlow16\fR"
 These are the standard OXM (OpenFlow Extensible Match) flow format in
-OpenFlow 1.2, 1.3, and 1.4, respectively.
+OpenFlow 1.2 and later.
 .RE
 .
 .IP

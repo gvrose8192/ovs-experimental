@@ -112,7 +112,9 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    10, "ls_in_arp_rsp")       \
     PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  11, "ls_in_dhcp_options")  \
     PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 12, "ls_in_dhcp_response") \
-    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       13, "ls_in_l2_lkup")       \
+    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,      13, "ls_in_dns_lookup") \
+    PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  14, "ls_in_dns_response") \
+    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       15, "ls_in_l2_lkup")       \
                                                                       \
     /* Logical switch egress stages. */                               \
     PIPELINE_STAGE(SWITCH, OUT, PRE_LB,       0, "ls_out_pre_lb")     \
@@ -160,6 +162,7 @@ enum ovn_stage {
 #define REGBIT_CONNTRACK_COMMIT "reg0[1]"
 #define REGBIT_CONNTRACK_NAT    "reg0[2]"
 #define REGBIT_DHCP_OPTS_RESULT "reg0[3]"
+#define REGBIT_DNS_LOOKUP_RESULT "reg0[4]"
 
 /* Register definitions for switches and routers. */
 #define REGBIT_NAT_REDIRECT     "reg9[0]"
@@ -595,6 +598,34 @@ init_ipam_info_for_datapath(struct ovn_datapath *od)
 }
 
 static void
+ovn_datapath_update_external_ids(struct ovn_datapath *od)
+{
+    /* Get the logical-switch or logical-router UUID to set in
+     * external-ids. */
+    char uuid_s[UUID_LEN + 1];
+    sprintf(uuid_s, UUID_FMT, UUID_ARGS(&od->key));
+    const char *key = od->nbs ? "logical-switch" : "logical-router";
+
+    /* Get names to set in external-ids. */
+    const char *name = od->nbs ? od->nbs->name : od->nbr->name;
+    const char *name2 = (od->nbs
+                         ? smap_get(&od->nbs->external_ids,
+                                    "neutron:network_name")
+                         : smap_get(&od->nbr->external_ids,
+                                    "neutron:router_name"));
+
+    /* Set external-ids. */
+    struct smap ids = SMAP_INITIALIZER(&ids);
+    smap_add(&ids, key, uuid_s);
+    smap_add(&ids, "name", name);
+    if (name2 && name2[0]) {
+        smap_add(&ids, "name2", name2);
+    }
+    sbrec_datapath_binding_set_external_ids(od->sb, &ids);
+    smap_destroy(&ids);
+}
+
+static void
 join_datapaths(struct northd_context *ctx, struct hmap *datapaths,
                struct ovs_list *sb_only, struct ovs_list *nb_only,
                struct ovs_list *both)
@@ -642,6 +673,7 @@ join_datapaths(struct northd_context *ctx, struct hmap *datapaths,
             od->nbs = nbs;
             ovs_list_remove(&od->list);
             ovs_list_push_back(both, &od->list);
+            ovn_datapath_update_external_ids(od);
         } else {
             od = ovn_datapath_create(datapaths, &nbs->header_.uuid,
                                      nbs, NULL, NULL);
@@ -664,6 +696,7 @@ join_datapaths(struct northd_context *ctx, struct hmap *datapaths,
                 od->nbr = nbr;
                 ovs_list_remove(&od->list);
                 ovs_list_push_back(both, &od->list);
+                ovn_datapath_update_external_ids(od);
             } else {
                 /* Can't happen! */
                 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
@@ -715,25 +748,7 @@ build_datapaths(struct northd_context *ctx, struct hmap *datapaths)
             }
 
             od->sb = sbrec_datapath_binding_insert(ctx->ovnsb_txn);
-
-            /* Get the logical-switch or logical-router UUID to set in
-             * external-ids. */
-            char uuid_s[UUID_LEN + 1];
-            sprintf(uuid_s, UUID_FMT, UUID_ARGS(&od->key));
-            const char *key = od->nbs ? "logical-switch" : "logical-router";
-
-            /* Get name to set in external-ids. */
-            const char *name = od->nbs ? od->nbs->name : od->nbr->name;
-
-            /* Set external-ids. */
-            struct smap ids = SMAP_INITIALIZER(&ids);
-            smap_add(&ids, key, uuid_s);
-            if (*name) {
-                smap_add(&ids, "name", name);
-            }
-            sbrec_datapath_binding_set_external_ids(od->sb, &ids);
-            smap_destroy(&ids);
-
+            ovn_datapath_update_external_ids(od);
             sbrec_datapath_binding_set_tunnel_key(od->sb, tunnel_key);
         }
         destroy_tnlids(&dp_tnlids);
@@ -1702,6 +1717,9 @@ ovn_port_update_sbrec(const struct ovn_port *op,
         sbrec_port_binding_set_parent_port(op->sb, NULL);
         sbrec_port_binding_set_tag(op->sb, NULL, 0);
         sbrec_port_binding_set_mac(op->sb, NULL, 0);
+
+        struct smap ids = SMAP_INITIALIZER(&ids);
+        sbrec_port_binding_set_external_ids(op->sb, &ids);
     } else {
         if (strcmp(op->nbsp->type, "router")) {
             uint32_t queue_id = smap_get_int(
@@ -1794,6 +1812,14 @@ ovn_port_update_sbrec(const struct ovn_port *op,
         sbrec_port_binding_set_tag(op->sb, op->nbsp->tag, op->nbsp->n_tag);
         sbrec_port_binding_set_mac(op->sb, (const char **) op->nbsp->addresses,
                                    op->nbsp->n_addresses);
+
+        struct smap ids = SMAP_INITIALIZER(&ids);
+        const char *name = smap_get(&op->nbsp->external_ids,
+                                    "neutron:port_name");
+        if (name && name[0]) {
+            smap_add(&ids, "name", name);
+        }
+        sbrec_port_binding_set_external_ids(op->sb, &ids);
     }
 }
 
@@ -2669,6 +2695,22 @@ ip_address_and_port_from_lb_key(const char *key, char **ip_address,
     free(start);
 }
 
+/*
+ * Returns true if logical switch is configured with DNS records, false
+ * otherwise.
+ */
+static bool
+ls_has_dns_records(const struct nbrec_logical_switch *nbs)
+{
+    for (size_t i = 0; i < nbs->n_dns_records; i++) {
+        if (!smap_is_empty(&nbs->dns_records[i]->records)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static void
 build_pre_lb(struct ovn_datapath *od, struct hmap *lflows)
 {
@@ -2961,7 +3003,8 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows)
     }
 
     /* Add 34000 priority flow to allow DHCP reply from ovn-controller to all
-     * logical ports of the datapath if the CMS has configured DHCPv4 options*/
+     * logical ports of the datapath if the CMS has configured DHCPv4 options.
+     * */
     for (size_t i = 0; i < od->nbs->n_ports; i++) {
         if (od->nbs->ports[i]->dhcpv4_options) {
             const char *server_id = smap_get(
@@ -3011,6 +3054,16 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows)
                 ds_destroy(&match);
             }
         }
+    }
+
+    /* Add a 34000 priority flow to advance the DNS reply from ovn-controller,
+     * if the CMS has configured DNS records for the datapath.
+     */
+    if (ls_has_dns_records(od->nbs)) {
+        const char *actions = has_stateful ? "ct_commit; next;" : "next;";
+        ovn_lflow_add(
+            lflows, od, S_SWITCH_OUT_ACL, 34000, "udp.src == 53",
+            actions);
     }
 }
 
@@ -3449,8 +3502,44 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
+    /* Logical switch ingress table 13 and 14: DNS lookup and response
+     * priority 100 flows.
+     */
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbs || !ls_has_dns_records(od->nbs)) {
+           continue;
+        }
+
+        struct ds match;
+        struct ds action;
+        ds_init(&match);
+        ds_init(&action);
+        ds_put_cstr(&match, "udp.dst == 53");
+        ds_put_format(&action,
+                      REGBIT_DNS_LOOKUP_RESULT" = dns_lookup(); next;");
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_LOOKUP, 100,
+                      ds_cstr(&match), ds_cstr(&action));
+        ds_clear(&action);
+        ds_put_cstr(&match, " && "REGBIT_DNS_LOOKUP_RESULT);
+        ds_put_format(&action, "eth.dst <-> eth.src; ip4.src <-> ip4.dst; "
+                      "udp.dst = udp.src; udp.src = 53; outport = inport; "
+                      "flags.loopback = 1; output;");
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 100,
+                      ds_cstr(&match), ds_cstr(&action));
+        ds_clear(&action);
+        ds_put_format(&action, "eth.dst <-> eth.src; ip6.src <-> ip6.dst; "
+                      "udp.dst = udp.src; udp.src = 53; outport = inport; "
+                      "flags.loopback = 1; output;");
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 100,
+                      ds_cstr(&match), ds_cstr(&action));
+        ds_destroy(&match);
+        ds_destroy(&action);
+    }
+
     /* Ingress table 11 and 12: DHCP options and response, by default goto next.
-     * (priority 0). */
+     * (priority 0).
+     * Ingress table 13 and 14: DNS lookup and response, by default goto next.
+     * (priority 0).*/
 
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
@@ -3459,9 +3548,11 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
 
         ovn_lflow_add(lflows, od, S_SWITCH_IN_DHCP_OPTIONS, 0, "1", "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_IN_DHCP_RESPONSE, 0, "1", "next;");
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_LOOKUP, 0, "1", "next;");
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 0, "1", "next;");
     }
 
-    /* Ingress table 13: Destination lookup, broadcast and multicast handling
+    /* Ingress table 15: Destination lookup, broadcast and multicast handling
      * (priority 100). */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp) {
@@ -5408,6 +5499,108 @@ sync_address_sets(struct northd_context *ctx)
     }
     shash_destroy(&sb_address_sets);
 }
+
+/*
+ * struct 'dns_info' is used to sync the DNS records between OVN Northbound db
+ * and Southbound db.
+ */
+struct dns_info {
+    struct hmap_node hmap_node;
+    const struct nbrec_dns *nb_dns; /* DNS record in the Northbound db. */
+    const struct sbrec_dns *sb_dns; /* DNS record in the Soutbound db. */
+
+    /* Datapaths to which the DNS entry is associated with it. */
+    const struct sbrec_datapath_binding **sbs;
+    size_t n_sbs;
+};
+
+static inline struct dns_info *
+get_dns_info_from_hmap(struct hmap *dns_map, struct uuid *uuid)
+{
+    struct dns_info *dns_info;
+    size_t hash = uuid_hash(uuid);
+    HMAP_FOR_EACH_WITH_HASH (dns_info, hmap_node, hash, dns_map) {
+        if (uuid_equals(&dns_info->nb_dns->header_.uuid, uuid)) {
+            return dns_info;
+        }
+    }
+
+    return NULL;
+}
+
+static void
+sync_dns_entries(struct northd_context *ctx, struct hmap *datapaths)
+{
+    struct hmap dns_map = HMAP_INITIALIZER(&dns_map);
+    struct ovn_datapath *od;
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbs || !od->nbs->n_dns_records) {
+            continue;
+        }
+
+        for (size_t i = 0; i < od->nbs->n_dns_records; i++) {
+            struct dns_info *dns_info = get_dns_info_from_hmap(
+                &dns_map, &od->nbs->dns_records[i]->header_.uuid);
+            if (!dns_info) {
+                size_t hash = uuid_hash(
+                    &od->nbs->dns_records[i]->header_.uuid);
+                dns_info = xzalloc(sizeof *dns_info);;
+                dns_info->nb_dns = od->nbs->dns_records[i];
+                hmap_insert(&dns_map, &dns_info->hmap_node, hash);
+            }
+
+            dns_info->n_sbs++;
+            dns_info->sbs = xrealloc(dns_info->sbs,
+                                     dns_info->n_sbs * sizeof *dns_info->sbs);
+            dns_info->sbs[dns_info->n_sbs - 1] = od->sb;
+        }
+    }
+
+    const struct sbrec_dns *sbrec_dns, *next;
+    SBREC_DNS_FOR_EACH_SAFE (sbrec_dns, next, ctx->ovnsb_idl) {
+        const char *nb_dns_uuid = smap_get(&sbrec_dns->external_ids, "dns_id");
+        struct uuid dns_uuid;
+        if (!nb_dns_uuid || !uuid_from_string(&dns_uuid, nb_dns_uuid)) {
+            sbrec_dns_delete(sbrec_dns);
+            continue;
+        }
+
+        struct dns_info *dns_info =
+            get_dns_info_from_hmap(&dns_map, &dns_uuid);
+        if (dns_info) {
+            dns_info->sb_dns = sbrec_dns;
+        } else {
+            sbrec_dns_delete(sbrec_dns);
+        }
+    }
+
+    struct dns_info *dns_info;
+    HMAP_FOR_EACH_POP (dns_info, hmap_node, &dns_map) {
+        if (!dns_info->sb_dns) {
+            struct sbrec_dns *sbrec_dns = sbrec_dns_insert(ctx->ovnsb_txn);
+            dns_info->sb_dns = sbrec_dns;
+            char *dns_id = xasprintf(
+                UUID_FMT, UUID_ARGS(&dns_info->nb_dns->header_.uuid));
+            const struct smap external_ids =
+                SMAP_CONST1(&external_ids, "dns_id", dns_id);
+            sbrec_dns_set_external_ids(sbrec_dns, &external_ids);
+            free(dns_id);
+        }
+
+        /* Set the datapaths and records. If nothing has changed, then
+         * this will be a no-op.
+         */
+        sbrec_dns_set_datapaths(
+            dns_info->sb_dns,
+            (struct sbrec_datapath_binding **)dns_info->sbs,
+            dns_info->n_sbs);
+        sbrec_dns_set_records(dns_info->sb_dns, &dns_info->nb_dns->records);
+        free(dns_info->sbs);
+        free(dns_info);
+    }
+    hmap_destroy(&dns_map);
+}
+
 
 static void
 ovnnb_db_run(struct northd_context *ctx, struct ovsdb_idl_loop *sb_loop)
@@ -5422,6 +5615,7 @@ ovnnb_db_run(struct northd_context *ctx, struct ovsdb_idl_loop *sb_loop)
     build_lflows(ctx, &datapaths, &ports);
 
     sync_address_sets(ctx);
+    sync_dns_entries(ctx, &datapaths);
 
     struct ovn_datapath *dp, *next_dp;
     HMAP_FOR_EACH_SAFE (dp, next_dp, key_node, &datapaths) {
@@ -5803,6 +5997,8 @@ main(int argc, char *argv[])
     add_column_noalert(ovnsb_idl_loop.idl,
                        &sbrec_port_binding_col_nat_addresses);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_port_binding_col_chassis);
+    add_column_noalert(ovnsb_idl_loop.idl,
+                       &sbrec_port_binding_col_external_ids);
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_mac_binding);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_datapath);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_ip);
@@ -5820,6 +6016,11 @@ main(int argc, char *argv[])
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_address_set);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_address_set_col_name);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_address_set_col_addresses);
+
+    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_dns);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dns_col_datapaths);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dns_col_records);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dns_col_external_ids);
 
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_chassis);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_chassis_col_nb_cfg);

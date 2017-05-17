@@ -215,6 +215,7 @@ Mehak Mahajan                   mmahajan@nicira.com
 Michael Arnaldi                 arnaldimichael@gmail.com
 Michal Weglicki                 michalx.weglicki@intel.com
 Mickey Spiegel                  mickeys.dev@gmail.com
+Miguel Angel Ajo                majopela@redhat.com
 Mijo Safradin                   mijo@linux.vnet.ibm.com
 Mika Vaisanen                   mika.vaisanen@gmail.com
 Minoru TAKAHASHI                takahashi.minoru7@gmail.com
@@ -324,6 +325,7 @@ Yuanhan Liu                     yuanhan.liu@linux.intel.com
 ZhengLingyun                    konghuarukhr@163.com
 Zoltán Balogh                   zoltan.balogh@ericsson.com
 Zoltan Kiss                     zoltan.kiss@citrix.com
+Zongkai LI                      zealokii@gmail.com
 Zhi Yong Wu                     zwu.kernel@gmail.com
 Zang MingJie                    zealot0630@gmail.com
 nickcooper-zhangtonghao         nickcooper-zhangtonghao@opencloud.tech
@@ -528,6 +530,7 @@ Teemu Koponen                   koponen@nicira.com
 Thomas Morin                    thomas.morin@orange.com
 Timothy Chen                    tchen@nicira.com
 Torbjorn Tornkvist              kruskakli@gmail.com
+Tulio Ribeiro                   tribeiro@lasige.di.fc.ul.pt
 Tytus Kurek                     Tytus.Kurek@pega.com
 Valentin Bud                    valentin@hackaserver.com
 Vasiliy Tolstov                 v.tolstov@selfip.ru

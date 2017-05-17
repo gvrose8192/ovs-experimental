@@ -531,7 +531,7 @@ static int key_extract(struct sk_buff *skb, struct sw_flow_key *key)
 
 	/* Link layer. */
 	clear_vlan(key);
-	if (key->mac_proto == MAC_PROTO_NONE) {
+	if (ovs_key_mac_proto(key) == MAC_PROTO_NONE) {
 		if (unlikely(eth_type_vlan(skb->protocol)))
 			return -EINVAL;
 
@@ -666,12 +666,7 @@ static int key_extract(struct sk_buff *skb, struct sw_flow_key *key)
 	} else if (eth_p_mpls(key->eth.type)) {
 		size_t stack_len = MPLS_HLEN;
 
-		/* In the presence of an MPLS label stack the end of the L2
-		 * header and the beginning of the L3 header differ.
-		 *
-		 * Advance network_header to the beginning of the L3
-		 * header. mac_len corresponds to the end of the L2 header.
-		 */
+		skb_set_inner_network_header(skb, skb->mac_len);
 		while (1) {
 			__be32 lse;
 
@@ -679,12 +674,12 @@ static int key_extract(struct sk_buff *skb, struct sw_flow_key *key)
 			if (unlikely(error))
 				return 0;
 
-			memcpy(&lse, skb_network_header(skb), MPLS_HLEN);
+			memcpy(&lse, skb_inner_network_header(skb), MPLS_HLEN);
 
 			if (stack_len == MPLS_HLEN)
 				memcpy(&key->mpls.top_lse, &lse, MPLS_HLEN);
 
-			skb_set_network_header(skb, skb->mac_len + stack_len);
+			skb_set_inner_network_header(skb, skb->mac_len + stack_len);
 			if (lse & htonl(MPLS_LS_S_MASK))
 				break;
 
@@ -756,7 +751,13 @@ static int key_extract(struct sk_buff *skb, struct sw_flow_key *key)
 
 int ovs_flow_key_update(struct sk_buff *skb, struct sw_flow_key *key)
 {
-	return key_extract(skb, key);
+	int res;
+
+	res = key_extract(skb, key);
+	if (!res)
+		key->mac_proto &= ~SW_FLOW_KEY_INVALID;
+
+	return res;
 }
 
 static int key_extract_mac_proto(struct sk_buff *skb)

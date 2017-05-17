@@ -58,7 +58,7 @@ static void ofp_print_error(struct ds *, enum ofperr);
 /* Returns a string that represents the contents of the Ethernet frame in the
  * 'len' bytes starting at 'data'.  The caller must free the returned string.*/
 char *
-ofp_packet_to_string(const void *data, size_t len)
+ofp_packet_to_string(const void *data, size_t len, ovs_be32 packet_type)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
     struct dp_packet buf;
@@ -66,6 +66,7 @@ ofp_packet_to_string(const void *data, size_t len)
     size_t l4_size;
 
     dp_packet_use_const(&buf, data, len);
+    buf.packet_type = packet_type;
     flow_extract(&buf, &flow);
     flow_format(&ds, &flow);
 
@@ -94,6 +95,14 @@ ofp_packet_to_string(const void *data, size_t len)
     ds_put_char(&ds, '\n');
 
     return ds_cstr(&ds);
+}
+
+char *
+ofp_dp_packet_to_string(const struct dp_packet *packet)
+{
+    return ofp_packet_to_string(dp_packet_data(packet),
+                                dp_packet_size(packet),
+                                packet->packet_type);
 }
 
 static void
@@ -208,8 +217,10 @@ ofp_print_packet_in(struct ds *string, const struct ofp_header *oh,
     }
 
     if (verbosity > 0) {
+        /* Packet In can only carry Ethernet packets. */
         char *packet = ofp_packet_to_string(public->packet,
-                                            public->packet_len);
+                                            public->packet_len,
+                                            htonl(PT_ETH));
         ds_put_cstr(string, packet);
         free(packet);
     }
@@ -245,7 +256,9 @@ ofp_print_packet_out(struct ds *string, const struct ofp_header *oh,
     if (po.buffer_id == UINT32_MAX) {
         ds_put_format(string, " data_len=%"PRIuSIZE, po.packet_len);
         if (verbosity > 0 && po.packet_len > 0) {
-            char *packet = ofp_packet_to_string(po.packet, po.packet_len);
+            /* Packet Out can only carry Ethernet packets. */
+            char *packet = ofp_packet_to_string(po.packet, po.packet_len,
+                                                htonl(PT_ETH));
             ds_put_char(string, '\n');
             ds_put_cstr(string, packet);
             free(packet);
@@ -1333,11 +1346,36 @@ ofp_print_meter_band(struct ds *s, uint16_t flags,
 }
 
 static void
+ofp_print_meter_id(struct ds *s, uint32_t meter_id, char seperator)
+{
+    if (meter_id <= OFPM13_MAX) {
+        ds_put_format(s, "meter%c%"PRIu32, seperator, meter_id);
+    } else {
+        const char *name;
+        switch (meter_id) {
+        case OFPM13_SLOWPATH:
+            name = "slowpath";
+            break;
+        case OFPM13_CONTROLLER:
+            name = "controller";
+            break;
+        case OFPM13_ALL:
+            name = "all";
+            break;
+        default:
+            name = "unknown";
+        }
+        ds_put_format(s, "meter%c%s", seperator, name);
+    }
+}
+
+static void
 ofp_print_meter_stats(struct ds *s, const struct ofputil_meter_stats *ms)
 {
     uint16_t i;
 
-    ds_put_format(s, "meter:%"PRIu32" ", ms->meter_id);
+    ofp_print_meter_id(s, ms->meter_id, ':');
+    ds_put_char(s, ' ');
     ds_put_format(s, "flow_count:%"PRIu32" ", ms->flow_count);
     ds_put_format(s, "packet_in_count:%"PRIu64" ", ms->packet_in_count);
     ds_put_format(s, "byte_in_count:%"PRIu64" ", ms->byte_in_count);
@@ -1358,7 +1396,8 @@ ofp_print_meter_config(struct ds *s, const struct ofputil_meter_config *mc)
 {
     uint16_t i;
 
-    ds_put_format(s, "meter=%"PRIu32" ", mc->meter_id);
+    ofp_print_meter_id(s, mc->meter_id, '=');
+    ds_put_char(s, ' ');
 
     ofp_print_meter_flags(s, mc->flags);
 
@@ -1412,8 +1451,9 @@ ofp_print_meter_stats_request(struct ds *s, const struct ofp_header *oh)
     uint32_t meter_id;
 
     ofputil_decode_meter_request(oh, &meter_id);
+    ds_put_char(s, ' ');
 
-    ds_put_format(s, " meter=%"PRIu32, meter_id);
+    ofp_print_meter_id(s, meter_id, '=');
 }
 
 static const char *
@@ -1632,7 +1672,7 @@ ofp_print_flow_stats_request(struct ds *string, const struct ofp_header *oh)
 }
 
 void
-ofp_print_flow_stats(struct ds *string, struct ofputil_flow_stats *fs)
+ofp_print_flow_stats(struct ds *string, const struct ofputil_flow_stats *fs)
 {
     ds_put_format(string, " %scookie=%s0x%"PRIx64", %sduration=%s",
                   colors.param, colors.end, ntohll(fs->cookie),
@@ -3733,7 +3773,14 @@ ofp_print(FILE *stream, const void *oh, size_t len, int verbosity)
 /* Dumps the contents of the Ethernet frame in the 'len' bytes starting at
  * 'data' to 'stream'. */
 void
-ofp_print_packet(FILE *stream, const void *data, size_t len)
+ofp_print_packet(FILE *stream, const void *data, size_t len,
+                 ovs_be32 packet_type)
 {
-    print_and_free(stream, ofp_packet_to_string(data, len));
+    print_and_free(stream, ofp_packet_to_string(data, len, packet_type));
+}
+
+void
+ofp_print_dp_packet(FILE *stream, const struct dp_packet *packet)
+{
+    print_and_free(stream, ofp_dp_packet_to_string(packet));
 }

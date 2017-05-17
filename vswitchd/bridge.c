@@ -496,14 +496,14 @@ bridge_init(const char *remote)
 }
 
 void
-bridge_exit(void)
+bridge_exit(bool delete_datapath)
 {
     struct bridge *br, *next_br;
 
     if_notifier_destroy(ifnotifier);
     seq_destroy(ifaces_changed);
     HMAP_FOR_EACH_SAFE (br, next_br, node, &all_bridges) {
-        bridge_destroy(br, false);
+        bridge_destroy(br, delete_datapath);
     }
     ovsdb_idl_destroy(idl);
 }
@@ -2704,34 +2704,31 @@ static void
 refresh_controller_status(void)
 {
     struct bridge *br;
-    struct shash info;
-    const struct ovsrec_controller *cfg;
-
-    shash_init(&info);
 
     /* Accumulate status for controllers on all bridges. */
     HMAP_FOR_EACH (br, node, &all_bridges) {
+        struct shash info = SHASH_INITIALIZER(&info);
         ofproto_get_ofproto_controller_info(br->ofproto, &info);
-    }
 
-    /* Update each controller in the database with current status. */
-    OVSREC_CONTROLLER_FOR_EACH(cfg, idl) {
-        struct ofproto_controller_info *cinfo =
-            shash_find_data(&info, cfg->target);
+        /* Update each controller of the bridge in the database with
+         * current status. */
+        struct ovsrec_controller **controllers;
+        size_t n_controllers = bridge_get_controllers(br, &controllers);
+        size_t i;
+        for (i = 0; i < n_controllers; i++) {
+            struct ovsrec_controller *cfg = controllers[i];
+            struct ofproto_controller_info *cinfo =
+                shash_find_data(&info, cfg->target);
 
-        if (cinfo) {
+            ovs_assert(cinfo);
             ovsrec_controller_set_is_connected(cfg, cinfo->is_connected);
-            ovsrec_controller_set_role(cfg, ofp12_controller_role_to_str(
-                                           cinfo->role));
+            const char *role = ofp12_controller_role_to_str(cinfo->role);
+            ovsrec_controller_set_role(cfg, role);
             ovsrec_controller_set_status(cfg, &cinfo->pairs);
-        } else {
-            ovsrec_controller_set_is_connected(cfg, false);
-            ovsrec_controller_set_role(cfg, NULL);
-            ovsrec_controller_set_status(cfg, NULL);
         }
-    }
 
-    ofproto_free_ofproto_controller_info(&info);
+        ofproto_free_ofproto_controller_info(&info);
+    }
 }
 
 /* Update interface and mirror statistics if necessary. */

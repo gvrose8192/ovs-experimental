@@ -143,7 +143,7 @@ void odp_portno_names_destroy(struct hmap *portno_names);
  * add another field and forget to adjust this value.
  */
 #define ODPUTIL_FLOW_KEY_BYTES 640
-BUILD_ASSERT_DECL(FLOW_WC_SEQ == 38);
+BUILD_ASSERT_DECL(FLOW_WC_SEQ == 39);
 
 /* A buffer with sufficient size and alignment to hold an nlattr-formatted flow
  * key.  An array of "struct nlattr" might not, in theory, be sufficiently
@@ -328,4 +328,10 @@ void odp_put_tunnel_action(const struct flow_tnl *tunnel,
 
 void odp_put_tnl_push_action(struct ofpbuf *odp_actions,
                              struct ovs_action_push_tnl *data);
+
+void odp_put_pop_eth_action(struct ofpbuf *odp_actions);
+void odp_put_push_eth_action(struct ofpbuf *odp_actions,
+                             const struct eth_addr *eth_src,
+                             const struct eth_addr *eth_dst);
+
 #endif /* odp-util.h */

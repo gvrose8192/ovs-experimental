@@ -645,7 +645,7 @@ dealloc(struct ofproto *ofproto_)
 }
 
 static void
-close_dpif_backer(struct dpif_backer *backer)
+close_dpif_backer(struct dpif_backer *backer, bool del)
 {
     ovs_assert(backer->refcount > 0);
 
@@ -661,7 +661,11 @@ close_dpif_backer(struct dpif_backer *backer)
     shash_find_and_delete(&all_dpif_backers, backer->type);
     free(backer->type);
     free(backer->dp_version_string);
+    if (del) {
+        dpif_delete(backer->dpif);
+    }
     dpif_close(backer->dpif);
+    id_pool_destroy(backer->meter_ids);
     free(backer);
 }
 
@@ -772,7 +776,7 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
     if (error) {
         VLOG_ERR("failed to listen on datapath of type %s: %s",
                  type, ovs_strerror(error));
-        close_dpif_backer(backer);
+        close_dpif_backer(backer, false);
         return error;
     }
 
@@ -786,6 +790,15 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
     backer->support.variable_length_userdata
         = check_variable_length_userdata(backer);
     backer->dp_version_string = dpif_get_dp_version(backer->dpif);
+
+    /* Manage Datapath meter IDs if supported. */
+    struct ofputil_meter_features features;
+    dpif_meter_get_features(backer->dpif, &features);
+    if (features.max_meters) {
+        backer->meter_ids = id_pool_create(0, features.max_meters);
+    } else {
+        backer->meter_ids = NULL;
+    }
 
     return error;
 }
@@ -1241,6 +1254,68 @@ check_clone(struct dpif_backer *backer)
     return !error;
 }
 
+/* Tests whether 'backer''s datapath supports the OVS_CT_ATTR_EVENTMASK
+ * attribute in OVS_ACTION_ATTR_CT. */
+static bool
+check_ct_eventmask(struct dpif_backer *backer)
+{
+    struct dpif_execute execute;
+    struct dp_packet packet;
+    struct ofpbuf actions;
+    struct flow flow = {
+        .dl_type = CONSTANT_HTONS(ETH_TYPE_IP),
+        .nw_proto = IPPROTO_UDP,
+        .nw_ttl = 64,
+        /* Use the broadcast address on the loopback address range 127/8 to
+         * avoid hitting any real conntrack entries.  We leave the UDP ports to
+         * zeroes for the same purpose. */
+        .nw_src = CONSTANT_HTONL(0x7fffffff),
+        .nw_dst = CONSTANT_HTONL(0x7fffffff),
+    };
+    size_t ct_start;
+    int error;
+
+    /* Compose CT action with eventmask attribute and check if datapath can
+     * decode the message.  */
+    ofpbuf_init(&actions, 64);
+    ct_start = nl_msg_start_nested(&actions, OVS_ACTION_ATTR_CT);
+    /* Eventmask has no effect without the commit flag, but currently the
+     * datapath will accept an eventmask even without commit.  This is useful
+     * as we do not want to persist the probe connection in the conntrack
+     * table. */
+    nl_msg_put_u32(&actions, OVS_CT_ATTR_EVENTMASK, ~0);
+    nl_msg_end_nested(&actions, ct_start);
+
+    /* Compose a dummy UDP packet. */
+    dp_packet_init(&packet, 0);
+    flow_compose(&packet, &flow);
+
+    /* Execute the actions.  On older datapaths this fails with EINVAL, on
+     * newer datapaths it succeeds. */
+    execute.actions = actions.data;
+    execute.actions_len = actions.size;
+    execute.packet = &packet;
+    execute.flow = &flow;
+    execute.needs_help = false;
+    execute.probe = true;
+    execute.mtu = 0;
+
+    error = dpif_execute(backer->dpif, &execute);
+
+    dp_packet_uninit(&packet);
+    ofpbuf_uninit(&actions);
+
+    if (error) {
+        VLOG_INFO("%s: Datapath does not support eventmask in conntrack action",
+                  dpif_name(backer->dpif));
+    } else {
+        VLOG_INFO("%s: Datapath supports eventmask in conntrack action",
+                  dpif_name(backer->dpif));
+    }
+
+    return !error;
+}
+
 #define CHECK_FEATURE__(NAME, SUPPORT, FIELD, VALUE)                        \
 static bool                                                                 \
 check_##NAME(struct dpif_backer *backer)                                    \
@@ -1300,6 +1375,7 @@ check_support(struct dpif_backer *backer)
     backer->support.tnl_push_pop = dpif_supports_tnl_push_pop(backer->dpif);
     backer->support.clone = check_clone(backer);
     backer->support.sample_nesting = check_max_sample_nesting(backer);
+    backer->support.ct_eventmask = check_ct_eventmask(backer);
 
     /* Flow fields. */
     backer->support.odp.ct_state = check_ct_state(backer);
@@ -1452,7 +1528,7 @@ add_internal_flows(struct ofproto_dpif *ofproto)
 }
 
 static void
-destruct(struct ofproto *ofproto_)
+destruct(struct ofproto *ofproto_, bool del)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
     struct ofproto_async_msg *am;
@@ -1505,7 +1581,7 @@ destruct(struct ofproto *ofproto_)
 
     seq_destroy(ofproto->ams_seq);
 
-    close_dpif_backer(ofproto->backer);
+    close_dpif_backer(ofproto->backer, del);
 }
 
 static int
@@ -2210,7 +2286,7 @@ rstp_send_bpdu_cb(struct dp_packet *pkt, void *ofport_, void *ofproto_)
 {
     struct ofproto_dpif *ofproto = ofproto_;
     struct ofport_dpif *ofport = ofport_;
-    struct eth_header *eth = dp_packet_l2(pkt);
+    struct eth_header *eth = dp_packet_eth(pkt);
 
     netdev_get_etheraddr(ofport->up.netdev, &eth->eth_src);
     if (eth_addr_is_zero(eth->eth_src)) {
@@ -2235,7 +2311,7 @@ send_bpdu_cb(struct dp_packet *pkt, int port_num, void *ofproto_)
         VLOG_WARN_RL(&rl, "%s: cannot send BPDU on unknown port %d",
                      ofproto->up.name, port_num);
     } else {
-        struct eth_header *eth = dp_packet_l2(pkt);
+        struct eth_header *eth = dp_packet_eth(pkt);
 
         netdev_get_etheraddr(ofport->up.netdev, &eth->eth_src);
         if (eth_addr_is_zero(eth->eth_src)) {
@@ -5439,6 +5515,17 @@ meter_set(struct ofproto *ofproto_, ofproto_meter_id *meter_id,
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
 
+    /* Provider ID unknown. Use backer to allocate a new DP meter */
+    if (meter_id->uint32 == UINT32_MAX) {
+        if (!ofproto->backer->meter_ids) {
+            return EFBIG; /* Datapath does not support meter.  */
+        }
+
+        if(!id_pool_alloc_id(ofproto->backer->meter_ids, &meter_id->uint32)) {
+            return ENOMEM; /* Can't allocate a DP meter. */
+        }
+    }
+
     switch (dpif_meter_set(ofproto->backer->dpif, meter_id, config)) {
     case 0:
         return 0;
@@ -5468,12 +5555,36 @@ meter_get(const struct ofproto *ofproto_, ofproto_meter_id meter_id,
     return OFPERR_OFPMMFC_UNKNOWN_METER;
 }
 
+struct free_meter_id_args {
+    struct ofproto_dpif *ofproto;
+    ofproto_meter_id meter_id;
+};
+
+static void
+free_meter_id(struct free_meter_id_args *args)
+{
+    struct ofproto_dpif *ofproto = args->ofproto;
+
+    dpif_meter_del(ofproto->backer->dpif, args->meter_id, NULL, 0);
+    id_pool_free_id(ofproto->backer->meter_ids, args->meter_id.uint32);
+    free(args);
+}
+
 static void
 meter_del(struct ofproto *ofproto_, ofproto_meter_id meter_id)
 {
-    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+    struct free_meter_id_args *arg = xmalloc(sizeof *arg);
 
-    dpif_meter_del(ofproto->backer->dpif, meter_id, NULL, 0);
+    /* Before a meter can be deleted, Openflow spec requires all rules
+     * referring to the meter to be (automatically) removed before the
+     * meter is deleted. However, since vswitchd is multi-threaded,
+     * those rules and their actions remain accessible by other threads,
+     * especially by the handler and revalidator threads.
+     * Postpone meter deletion after RCU grace period, so that ongoing
+     * upcall translation or flow revalidation can complete. */
+    arg->ofproto = ofproto_dpif_cast(ofproto_);
+    arg->meter_id = meter_id;
+    ovsrcu_postpone(free_meter_id, arg);
 }
 
 const struct ofproto_class ofproto_dpif_class = {
