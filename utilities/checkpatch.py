@@ -62,18 +62,26 @@ def print_warning(message):
     __warnings = __warnings + 1
 
 
+# These are keywords whose names are normally followed by a space and
+# something in parentheses (usually an expression) then a left curly brace.
+#
+# 'do' almost qualifies but it's also used as "do { ... } while (...);".
+__parenthesized_constructs = 'if|for|while|switch|[_A-Z]+FOR_EACH[_A-Z]*'
+
 __regex_added_line = re.compile(r'^\+{1,2}[^\+][\w\W]*')
 __regex_subtracted_line = re.compile(r'^\-{1,2}[^\-][\w\W]*')
 __regex_leading_with_whitespace_at_all = re.compile(r'^\s+')
 __regex_leading_with_spaces = re.compile(r'^ +[\S]+')
 __regex_trailing_whitespace = re.compile(r'[^\S]+$')
 __regex_single_line_feed = re.compile(r'^\f$')
-__regex_for_if_missing_whitespace = re.compile(r' +(if|for|while)[\(]')
-__regex_for_if_too_much_whitespace = re.compile(r' +(if|for|while)  +[\(]')
+__regex_for_if_missing_whitespace = re.compile(r' +(%s)[\(]'
+                                               % __parenthesized_constructs)
+__regex_for_if_too_much_whitespace = re.compile(r' +(%s)  +[\(]'
+                                                % __parenthesized_constructs)
 __regex_for_if_parens_whitespace = \
-    re.compile(r' +(if|for|while) \( +[\s\S]+\)')
+    re.compile(r' +(%s) \( +[\s\S]+\)' % __parenthesized_constructs)
 __regex_is_for_if_single_line_bracket = \
-    re.compile(r'^ +(if|for|while) \(.*\)')
+    re.compile(r'^ +(%s) \(.*\)' % __parenthesized_constructs)
 __regex_ends_with_bracket = \
     re.compile(r'[^\s]\) {(\s+/\*[\s\Sa-zA-Z0-9\.,\?\*/+-]*)?$')
 __regex_ptr_declaration_missing_whitespace = re.compile(r'[a-zA-Z0-9]\*[^*]')
@@ -211,7 +219,7 @@ checks = [
 
 
 def regex_function_factory(func_name):
-    regex = re.compile('[^x]%s\([^)]*\)' % func_name)
+    regex = re.compile(r'\b%s\([^)]*\)' % func_name)
     return lambda x: regex.search(x) is not None
 
 
@@ -276,13 +284,13 @@ def run_checks(current_file, line, lineno):
         print("%s\n" % line)
 
 
-def ovs_checkpatch_parse(text):
-    global print_file_name, total_line
+def ovs_checkpatch_parse(text, filename):
+    global print_file_name, total_line, checking_file
     lineno = 0
     signatures = []
     co_authors = []
     parse = 0
-    current_file = ''
+    current_file = filename if checking_file else ''
     previous_file = ''
     scissors = re.compile(r'^[\w]*---[\w]*')
     hunks = re.compile('^(---|\+\+\+) (\S+)')
@@ -352,6 +360,8 @@ def ovs_checkpatch_parse(text):
             # linux or windows coding standards
             if current_file.startswith('datapath'):
                 continue
+            if current_file.startswith('include/linux'):
+                continue
             run_checks(current_file, cmp_line, lineno)
     if __errors or __warnings:
         return -1
@@ -387,7 +397,7 @@ def ovs_checkpatch_file(filename):
     for part in mail.walk():
         if part.get_content_maintype() == 'multipart':
             continue
-    result = ovs_checkpatch_parse(part.get_payload(decode=True))
+    result = ovs_checkpatch_parse(part.get_payload(decode=True), filename)
     if result < 0:
         print("Lines checked: %d, Warnings: %d, Errors: %d" %
               (total_line, __warnings, __errors))
@@ -436,5 +446,5 @@ if __name__ == '__main__':
         if sys.stdin.isatty():
             usage()
             sys.exit(-1)
-        sys.exit(ovs_checkpatch_parse(sys.stdin.read()))
+        sys.exit(ovs_checkpatch_parse(sys.stdin.read()), '-')
     sys.exit(ovs_checkpatch_file(filename))
