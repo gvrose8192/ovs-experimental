@@ -2577,6 +2577,34 @@ update_stp_port_state(struct ofport_dpif *ofport)
     }
 }
 
+static void
+stp_check_and_update_link_state(struct ofproto_dpif *ofproto)
+{
+    struct ofport_dpif *ofport;
+
+    HMAP_FOR_EACH (ofport, up.hmap_node, &ofproto->up.ports) {
+        bool up = netdev_get_carrier(ofport->up.netdev);
+
+        if (ofport->stp_port &&
+            up != (stp_port_get_state(ofport->stp_port) != STP_DISABLED)) {
+
+            VLOG_DBG("bridge %s, port %s is %s, %s it.",
+                     ofproto->up.name, netdev_get_name(ofport->up.netdev),
+                     up ? "up" : "down",
+                     up ? "enabling" : "disabling");
+
+            if (up) {
+                stp_port_enable(ofport->stp_port);
+                stp_port_set_aux(ofport->stp_port, ofport);
+            } else {
+                stp_port_disable(ofport->stp_port);
+            }
+
+            update_stp_port_state(ofport);
+        }
+    }
+}
+
 /* Configures STP on 'ofport_' using the settings defined in 's'.  The
  * caller is responsible for assigning STP port numbers and ensuring
  * there are no duplicates. */
@@ -2607,7 +2635,12 @@ set_stp_port(struct ofport *ofport_,
     /* Set name before enabling the port so that debugging messages can print
      * the name. */
     stp_port_set_name(sp, netdev_get_name(ofport->up.netdev));
-    stp_port_enable(sp);
+
+    if (netdev_get_carrier(ofport_->netdev)) {
+        stp_port_enable(sp);
+    } else {
+        stp_port_disable(sp);
+    }
 
     stp_port_set_aux(sp, ofport);
     stp_port_set_priority(sp, s->priority);
@@ -2669,6 +2702,9 @@ stp_run(struct ofproto_dpif *ofproto)
             stp_tick(ofproto->stp, MIN(INT_MAX, elapsed));
             ofproto->stp_last_tick = now;
         }
+
+        stp_check_and_update_link_state(ofproto);
+
         while (stp_get_changed_port(ofproto->stp, &sp)) {
             struct ofport_dpif *ofport = stp_port_get_aux(sp);
 
@@ -4980,7 +5016,7 @@ ofproto_unixctl_fdb_show(struct unixctl_conn *conn, int argc OVS_UNUSED,
         char name[OFP10_MAX_PORT_NAME_LEN];
 
         ofputil_port_to_string(ofbundle_get_a_port(bundle)->up.ofp_port,
-                               name, sizeof name);
+                               NULL, name, sizeof name);
         ds_put_format(&ds, "%5s  %4d  "ETH_ADDR_FMT"  %3d\n",
                       name, e->vlan, ETH_ADDR_ARGS(e->mac),
                       mac_entry_age(ofproto->ml, e));
@@ -5022,7 +5058,7 @@ ofproto_unixctl_mcast_snooping_show(struct unixctl_conn *conn,
 
             bundle = b->port;
             ofputil_port_to_string(ofbundle_get_a_port(bundle)->up.ofp_port,
-                                   name, sizeof name);
+                                   NULL, name, sizeof name);
             ds_put_format(&ds, "%5s  %4d  ", name, grp->vlan);
             ipv6_format_mapped(&grp->addr, &ds);
             ds_put_format(&ds, "         %3d\n",
@@ -5036,7 +5072,7 @@ ofproto_unixctl_mcast_snooping_show(struct unixctl_conn *conn,
 
         bundle = mrouter->port;
         ofputil_port_to_string(ofbundle_get_a_port(bundle)->up.ofp_port,
-                               name, sizeof name);
+                               NULL, name, sizeof name);
         ds_put_format(&ds, "%5s  %4d  querier             %3d\n",
                       name, mrouter->vlan,
                       mcast_mrouter_age(ofproto->ms, mrouter));

@@ -30,6 +30,7 @@
 
 struct ds;
 struct match;
+struct ofputil_port_map;
 struct ofputil_tlv_table_mod;
 
 /* Open vSwitch fields
@@ -2055,6 +2056,7 @@ void mf_set_flow_value_masked(const struct mf_field *,
                               const union mf_value *mask,
                               struct flow *);
 bool mf_is_tun_metadata(const struct mf_field *);
+bool mf_is_pipeline_field(const struct mf_field *);
 bool mf_is_set(const struct mf_field *, const struct flow *);
 void mf_mask_field(const struct mf_field *, struct flow_wildcards *);
 void mf_mask_field_masked(const struct mf_field *, const union mf_value *mask,
@@ -2100,10 +2102,13 @@ enum ofperr mf_check_dst(const struct mf_subfield *, const struct match *);
 
 /* Parsing and formatting. */
 char *mf_parse(const struct mf_field *, const char *,
+               const struct ofputil_port_map *,
                union mf_value *value, union mf_value *mask);
-char *mf_parse_value(const struct mf_field *, const char *, union mf_value *);
+char *mf_parse_value(const struct mf_field *, const char *,
+                     const struct ofputil_port_map *, union mf_value *);
 void mf_format(const struct mf_field *,
                const union mf_value *value, const union mf_value *mask,
+               const struct ofputil_port_map *,
                struct ds *);
 void mf_format_subvalue(const union mf_subvalue *subvalue, struct ds *s);
 
