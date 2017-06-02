@@ -5181,20 +5181,22 @@ ofputil_decode_port_mod(const struct ofp_header *oh,
 
     struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
     enum ofpraw raw = ofpraw_pull_assert(&b);
+
+    enum ofperr error;
     if (raw == OFPRAW_OFPT10_PORT_MOD) {
-        return ofputil_decode_ofp10_port_mod(b.data, pm);
+        error = ofputil_decode_ofp10_port_mod(b.data, pm);
     } else if (raw == OFPRAW_OFPT11_PORT_MOD) {
-        return ofputil_decode_ofp11_port_mod(b.data, pm);
+        error = ofputil_decode_ofp11_port_mod(b.data, pm);
     } else if (raw == OFPRAW_OFPT14_PORT_MOD) {
-        return ofputil_decode_ofp14_port_mod(&b, loose, pm);
+        error = ofputil_decode_ofp14_port_mod(&b, loose, pm);
     } else if (raw == OFPRAW_OFPT16_PORT_MOD) {
-        return ofputil_decode_ofp16_port_mod(&b, loose, pm);
+        error = ofputil_decode_ofp16_port_mod(&b, loose, pm);
     } else {
-        return OFPERR_OFPBRC_BAD_TYPE;
+        error = OFPERR_OFPBRC_BAD_TYPE;
     }
 
     pm->config &= pm->mask;
-    return 0;
+    return error;
 }
 
 /* Converts the abstract form of a "port mod" message in '*pm' into an OpenFlow
@@ -10955,8 +10957,6 @@ struct ofpbuf *
 ofputil_encode_get_async_reply(const struct ofp_header *oh,
                                const struct ofputil_async_cfg *ac)
 {
-    struct ofpbuf *buf;
-
     enum ofpraw raw = (oh->version < OFP14_VERSION
                        ? OFPRAW_OFPT13_GET_ASYNC_REPLY
                        : OFPRAW_OFPT14_GET_ASYNC_REPLY);
@@ -10965,8 +10965,6 @@ ofputil_encode_get_async_reply(const struct ofp_header *oh,
                                raw == OFPRAW_OFPT14_GET_ASYNC_REPLY,
                                oh->version, UINT32_MAX);
     return reply;
-
-    return buf;
 }
 
 /* Encodes and returns a message, in a format appropriate for OpenFlow version

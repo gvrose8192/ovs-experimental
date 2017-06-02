@@ -200,7 +200,7 @@ checks = [
      'check': lambda x: line_length_check(x),
      'print': lambda: print_warning("Line length is >79-characters long")},
 
-    {'regex': '$(?<!\.mk)',
+    {'regex': '$(?<!\.mk|\.am)',
      'match_name': None,
      'check': lambda x: not leading_whitespace_is_spaces(x),
      'print': lambda: print_warning("Line has non-spaces leading whitespace")},
@@ -458,5 +458,5 @@ if __name__ == '__main__':
         if sys.stdin.isatty():
             usage()
             sys.exit(-1)
-        sys.exit(ovs_checkpatch_parse(sys.stdin.read()), '-')
+        sys.exit(ovs_checkpatch_parse(sys.stdin.read(), '-'))
     sys.exit(ovs_checkpatch_file(filename))
