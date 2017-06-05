@@ -291,6 +291,7 @@ enum ovs_vport_attr {
 enum {
 	OVS_VXLAN_EXT_UNSPEC,
 	OVS_VXLAN_EXT_GBP,      /* Flag or __u32 */
+	OVS_VXLAN_EXT_GPE = 8,  /* Flag or __u32 */
 	__OVS_VXLAN_EXT_MAX,
 };
 
@@ -363,6 +364,8 @@ enum ovs_key_attr {
 	/* Only used within kernel data path. */
 	OVS_KEY_ATTR_TUNNEL_INFO,  /* struct ovs_tunnel_info */
 #endif
+
+	OVS_KEY_ATTR_PACKET_TYPE,  /* be32 packet type */
 	__OVS_KEY_ATTR_MAX
 };
 

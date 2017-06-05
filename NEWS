@@ -23,6 +23,8 @@ Post-v2.7.0
      "dot1q-tunnel" port VLAN mode.
    - In ovn-vsctl and vtep-ctl, record UUIDs in commands may now be
      abbreviated to 4 hex digits.
+   - Userspace Datapath:
+     * Added NAT support for userspace datapath.
    - OVN:
      * New built-in DNS support.
      * IPAM for IPv4 can now exclude user-defined addresses from assignment.
@@ -49,6 +51,12 @@ Post-v2.7.0
    - Fedora Packaging:
      * OVN services are no longer restarted automatically after upgrade.
    - Add --cleanup option to command 'ovs-appctl exit' (see ovs-vswitchd(8)).
+   - L3 tunneling:
+     * Add "layer3" options for tunnel ports that support non-Ethernet (L3)
+       payload (GRE, VXLAN-GPE).
+     * New vxlan tunnel extension "gpe" to support VXLAN-GPE tunnels.
+     * Transparently pop and push Ethernet headers at transmit/reception
+       of packets to/from L3 tunnels.
 
 v2.7.0 - 21 Feb 2017
 ---------------------

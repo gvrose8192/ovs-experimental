@@ -132,7 +132,6 @@ pkt_metadata_init(struct pkt_metadata *md, odp_port_t port)
     memset(md, 0, offsetof(struct pkt_metadata, in_port));
     md->tunnel.ip_dst = 0;
     md->tunnel.ipv6_dst = in6addr_any;
-
     md->in_port.odp_port = port;
 }
 
@@ -890,6 +889,13 @@ struct icmp6_header {
 };
 BUILD_ASSERT_DECL(ICMP6_HEADER_LEN == sizeof(struct icmp6_header));
 
+#define ICMP6_ERROR_HEADER_LEN 8
+struct icmp6_error_header {
+    struct icmp6_header icmp6_base;
+    ovs_be32 icmp6_error_ext;
+};
+BUILD_ASSERT_DECL(ICMP6_ERROR_HEADER_LEN == sizeof(struct icmp6_error_header));
+
 uint32_t packet_csum_pseudoheader6(const struct ovs_16aligned_ip6_hdr *);
 uint16_t packet_csum_upperlayer6(const struct ovs_16aligned_ip6_hdr *,
                                  const void *, uint8_t, uint16_t);
@@ -1172,11 +1178,63 @@ struct gre_base_hdr {
 
 /* VXLAN protocol header */
 struct vxlanhdr {
-    ovs_16aligned_be32 vx_flags;
+    union {
+        ovs_16aligned_be32 vx_flags; /* VXLAN flags. */
+        struct {
+            uint8_t flags;           /* VXLAN GPE flags. */
+            uint8_t reserved[2];     /* 16 bits reserved. */
+            uint8_t next_protocol;   /* Next Protocol field for VXLAN GPE. */
+        } vx_gpe;
+    };
     ovs_16aligned_be32 vx_vni;
 };
+BUILD_ASSERT_DECL(sizeof(struct vxlanhdr) == 8);
 
 #define VXLAN_FLAGS 0x08000000  /* struct vxlanhdr.vx_flags required value. */
+
+/*
+ * VXLAN Generic Protocol Extension (VXLAN_F_GPE):
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ * |R|R|Ver|I|P|R|O|       Reserved                |Next Protocol  |
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ * |                VXLAN Network Identifier (VNI) |   Reserved    |
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *
+ * Ver = Version. Indicates VXLAN GPE protocol version.
+ *
+ * P = Next Protocol Bit. The P bit is set to indicate that the
+ *     Next Protocol field is present.
+ *
+ * O = OAM Flag Bit. The O bit is set to indicate that the packet
+ *     is an OAM packet.
+ *
+ * Next Protocol = This 8 bit field indicates the protocol header
+ * immediately following the VXLAN GPE header.
+ *
+ * https://tools.ietf.org/html/draft-ietf-nvo3-vxlan-gpe-01
+ */
+
+/* Fields in struct vxlanhdr.vx_gpe.flags */
+#define VXLAN_GPE_FLAGS_VER     0x30    /* Version. */
+#define VLXAN_GPE_FLAGS_P       0x04    /* Next Protocol Bit. */
+#define VXLAN_GPE_FLAGS_O       0x01    /* OAM Bit. */
+
+/* VXLAN-GPE header flags. */
+#define VXLAN_HF_VER   ((1U <<29) | (1U <<28))
+#define VXLAN_HF_NP    (1U <<26)
+#define VXLAN_HF_OAM   (1U <<24)
+
+#define VXLAN_GPE_USED_BITS (VXLAN_HF_VER | VXLAN_HF_NP | VXLAN_HF_OAM | \
+                            0xff)
+
+/* VXLAN-GPE header Next Protocol. */
+#define VXLAN_GPE_NP_IPV4      0x01
+#define VXLAN_GPE_NP_IPV6      0x02
+#define VXLAN_GPE_NP_ETHERNET  0x03
+#define VXLAN_GPE_NP_NSH       0x04
+
+#define VXLAN_F_GPE  0x4000
+#define VXLAN_HF_GPE 0x04000000
 
 /* Input values for PACKET_TYPE macros have to be in host byte order.
  * The _BE postfix indicates result is in network byte order. Otherwise result
