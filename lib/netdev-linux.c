@@ -851,6 +851,7 @@ netdev_linux_construct_tap(struct netdev *netdev_)
     }
 
     /* Create tap device. */
+    get_flags(&netdev->up, &netdev->ifi_flags);
     ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
     ovs_strzcpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
     if (ioctl(netdev->tap_fd, TUNSETIFF, &ifr) == -1) {
@@ -863,6 +864,13 @@ netdev_linux_construct_tap(struct netdev *netdev_)
     /* Make non-blocking. */
     error = set_nonblocking(netdev->tap_fd);
     if (error) {
+        goto error_close;
+    }
+
+    if (ioctl(netdev->tap_fd, TUNSETPERSIST, 1)) {
+        VLOG_WARN("%s: creating tap device failed (persist): %s", name,
+                  ovs_strerror(errno));
+        error = errno;
         goto error_close;
     }
 
@@ -885,6 +893,7 @@ netdev_linux_destruct(struct netdev *netdev_)
     if (netdev_get_class(netdev_) == &netdev_tap_class
         && netdev->tap_fd >= 0)
     {
+        ioctl(netdev->tap_fd, TUNSETPERSIST, 0);
         close(netdev->tap_fd);
     }
 
