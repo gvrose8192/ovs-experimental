@@ -848,7 +848,16 @@
 
     <group title="Common Columns">
       <column name="external_ids">
-        See <em>External IDs</em> at the beginning of this document.
+        <p>
+          See <em>External IDs</em> at the beginning of this document.
+        </p>
+
+        <p>
+          The <code>ovn-northd</code> program copies all these pairs into the
+          <ref column="external_ids"/> column of the
+          <ref table="Port_Binding"/> table in <ref db="OVN_Southbound"/>
+          database.
+        </p>
       </column>
     </group>
   </table>
@@ -2082,6 +2091,17 @@
       by the CA certificate thus obtained.  <em>This option exposes the
       SSL connection to a man-in-the-middle attack obtaining the initial
       CA certificate.</em>  It may still be useful for bootstrapping.
+    </column>
+
+    <column name="ssl_protocols">
+      List of SSL protocols to be enabled for SSL connections. The default
+      when this option is omitted is <code>TLSv1,TLSv1.1,TLSv1.2</code>.
+    </column>
+
+    <column name="ssl_ciphers">
+      List of ciphers (in OpenSSL cipher string format) to be supported
+      for SSL connections. The default when this option is omitted is
+      <code>HIGH:!aNULL:!MD5</code>.
     </column>
 
     <group title="Common Columns">
