@@ -16,6 +16,8 @@ Post-v2.7.0
        Log level can be changed in a usual OVS way using
        'ovs-appctl vlog' commands for 'dpdk' module. Lower bound
        still can be configured via extra arguments for DPDK EAL.
+     * dpdkvhostuser ports are marked as deprecated.  They will be removed
+       in an upcoming release.
    - IPFIX now provides additional counters:
      * Total counters since metering process startup.
      * Per-flow TCP flag counters.
@@ -38,7 +40,10 @@ Post-v2.7.0
        abbreviated to 4 hex digits.
      * "ovn-sbctl lflow-list" can now print OpenFlow flows that correspond
        to logical flows.
-   - Add the command 'ovs-appctl stp/show' (see ovs-vswitchd(8)).
+     * Now uses OVSDB RBAC support to reduce impact of compromised hypervisors.
+   - OVSDB:
+     * New support for role-based access control (see ovsdb-server(1)).
+   - New commands 'stp/show' and 'rstp/show' (see ovs-vswitchd(8)).
    - OpenFlow:
      * All features required by OpenFlow 1.4 are now implemented, so
        ovs-vswitchd now enables OpenFlow 1.4 by default (in addition to
