@@ -18,8 +18,9 @@
 #define __OVS_CONNTRACK_H_ 1
 
 #include "precomp.h"
-#include "Flow.h"
+#include "Actions.h"
 #include "Debug.h"
+#include "Flow.h"
 #include "Actions.h"
 #include <stddef.h>
 
@@ -68,6 +69,15 @@ typedef struct MD_LABELS {
     struct ovs_key_ct_labels mask;
 } MD_LABELS;
 
+typedef enum NAT_ACTION {
+    NAT_ACTION_NONE = 0,
+    NAT_ACTION_REVERSE = 1 << 0,
+    NAT_ACTION_SRC = 1 << 1,
+    NAT_ACTION_SRC_PORT = 1 << 2,
+    NAT_ACTION_DST = 1 << 3,
+    NAT_ACTION_DST_PORT = 1 << 4,
+};
+
 typedef struct _OVS_CT_KEY {
     struct ct_endpoint src;
     struct ct_endpoint dst;
@@ -78,6 +88,14 @@ typedef struct _OVS_CT_KEY {
     UINT64 byteCount;
 } OVS_CT_KEY, *POVS_CT_KEY;
 
+typedef struct _NAT_ACTION_INFO {
+    struct ct_addr minAddr;
+    struct ct_addr maxAddr;
+    uint16_t minPort;
+    uint16_t maxPort;
+    uint16_t natAction;
+} NAT_ACTION_INFO, *PNAT_ACTION_INFO;
+
 typedef struct OVS_CT_ENTRY {
     OVS_CT_KEY  key;
     OVS_CT_KEY  rev_key;
@@ -86,6 +104,7 @@ typedef struct OVS_CT_ENTRY {
     UINT32      mark;
     UINT64      timestampStart;
     struct ovs_key_ct_labels labels;
+    NAT_ACTION_INFO natInfo;
     PVOID       parent; /* Points to main connection */
 } OVS_CT_ENTRY, *POVS_CT_ENTRY;
 
@@ -207,5 +226,10 @@ NDIS_STATUS OvsCtHandleFtp(PNET_BUFFER_LIST curNbl,
                            UINT64 currentTime,
                            POVS_CT_ENTRY entry,
                            BOOLEAN request);
+
+UINT32 OvsHashCtKey(const OVS_CT_KEY *key);
+BOOLEAN OvsCtKeyAreSame(OVS_CT_KEY ctxKey, OVS_CT_KEY entryKey);
+POVS_CT_ENTRY OvsCtLookup(OvsConntrackKeyLookupCtx *ctx);
+
 
 #endif /* __OVS_CONNTRACK_H_ */
