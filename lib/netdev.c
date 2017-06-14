@@ -92,6 +92,8 @@ struct netdev_registered_class {
     struct ovs_refcount refcnt;
 };
 
+static bool netdev_flow_api_enabled = false;
+
 /* This is set pretty low because we probably won't learn anything from the
  * additional log messages. */
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
@@ -2020,3 +2022,127 @@ netdev_reconfigure(struct netdev *netdev)
             ? class->reconfigure(netdev)
             : EOPNOTSUPP);
 }
+
+int
+netdev_flow_flush(struct netdev *netdev)
+{
+    const struct netdev_class *class = netdev->netdev_class;
+
+    return (class->flow_flush
+            ? class->flow_flush(netdev)
+            : EOPNOTSUPP);
+}
+
+int
+netdev_flow_dump_create(struct netdev *netdev, struct netdev_flow_dump **dump)
+{
+    const struct netdev_class *class = netdev->netdev_class;
+
+    return (class->flow_dump_create
+            ? class->flow_dump_create(netdev, dump)
+            : EOPNOTSUPP);
+}
+
+int
+netdev_flow_dump_destroy(struct netdev_flow_dump *dump)
+{
+    const struct netdev_class *class = dump->netdev->netdev_class;
+
+    return (class->flow_dump_destroy
+            ? class->flow_dump_destroy(dump)
+            : EOPNOTSUPP);
+}
+
+bool
+netdev_flow_dump_next(struct netdev_flow_dump *dump, struct match *match,
+                      struct nlattr **actions, struct dpif_flow_stats *stats,
+                      ovs_u128 *ufid, struct ofpbuf *rbuffer,
+                      struct ofpbuf *wbuffer)
+{
+    const struct netdev_class *class = dump->netdev->netdev_class;
+
+    return (class->flow_dump_next
+            ? class->flow_dump_next(dump, match, actions, stats, ufid,
+                                    rbuffer, wbuffer)
+            : false);
+}
+
+int
+netdev_flow_put(struct netdev *netdev, struct match *match,
+                struct nlattr *actions, size_t act_len,
+                const ovs_u128 *ufid, struct offload_info *info,
+                struct dpif_flow_stats *stats)
+{
+    const struct netdev_class *class = netdev->netdev_class;
+
+    return (class->flow_put
+            ? class->flow_put(netdev, match, actions, act_len, ufid,
+                              info, stats)
+            : EOPNOTSUPP);
+}
+
+int
+netdev_flow_get(struct netdev *netdev, struct match *match,
+                struct nlattr **actions, const ovs_u128 *ufid,
+                struct dpif_flow_stats *stats, struct ofpbuf *buf)
+{
+    const struct netdev_class *class = netdev->netdev_class;
+
+    return (class->flow_get
+            ? class->flow_get(netdev, match, actions, ufid, stats, buf)
+            : EOPNOTSUPP);
+}
+
+int
+netdev_flow_del(struct netdev *netdev, const ovs_u128 *ufid,
+                struct dpif_flow_stats *stats)
+{
+    const struct netdev_class *class = netdev->netdev_class;
+
+    return (class->flow_del
+            ? class->flow_del(netdev, ufid, stats)
+            : EOPNOTSUPP);
+}
+
+int
+netdev_init_flow_api(struct netdev *netdev)
+{
+    const struct netdev_class *class = netdev->netdev_class;
+
+    if (!netdev_is_flow_api_enabled()) {
+        return EOPNOTSUPP;
+    }
+
+    return (class->init_flow_api
+            ? class->init_flow_api(netdev)
+            : EOPNOTSUPP);
+}
+
+bool
+netdev_is_flow_api_enabled(void)
+{
+    return netdev_flow_api_enabled;
+}
+
+#ifdef __linux__
+void
+netdev_set_flow_api_enabled(const struct smap *ovs_other_config)
+{
+    if (smap_get_bool(ovs_other_config, "hw-offload", false)) {
+        static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
+
+        if (ovsthread_once_start(&once)) {
+            netdev_flow_api_enabled = true;
+
+            VLOG_INFO("netdev: Flow API Enabled");
+
+            ovsthread_once_done(&once);
+        }
+    }
+}
+#else
+void
+netdev_set_flow_api_enabled(const struct smap *ovs_other_config OVS_UNUSED)
+{
+}
+#endif

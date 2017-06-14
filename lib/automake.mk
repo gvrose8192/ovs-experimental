@@ -358,6 +358,8 @@ lib_libopenvswitch_la_SOURCES += \
 	lib/if-notifier.h \
 	lib/netdev-linux.c \
 	lib/netdev-linux.h \
+	lib/netdev-tc-offloads.c \
+	lib/netdev-tc-offloads.h \
 	lib/netlink-conntrack.c \
 	lib/netlink-conntrack.h \
 	lib/netlink-notifier.c \
@@ -368,7 +370,9 @@ lib_libopenvswitch_la_SOURCES += \
 	lib/rtnetlink.c \
 	lib/rtnetlink.h \
 	lib/route-table.c \
-	lib/route-table.h
+	lib/route-table.h \
+	lib/tc.c \
+	lib/tc.h
 endif
 
 if DPDK_NETDEV
