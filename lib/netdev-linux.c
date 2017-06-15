@@ -530,7 +530,6 @@ static int set_flags(const char *, unsigned int flags);
 static int update_flags(struct netdev_linux *netdev, enum netdev_flags off,
                         enum netdev_flags on, enum netdev_flags *old_flagsp)
     OVS_REQUIRES(netdev->mutex);
-static int do_get_ifindex(const char *netdev_name);
 static int get_ifindex(const struct netdev *, int *ifindexp);
 static int do_set_addr(struct netdev *netdev,
                        int ioctl_nr, const char *ioctl_name,
@@ -2086,6 +2085,14 @@ netdev_linux_set_policing(struct netdev *netdev_,
     const char *netdev_name = netdev_get_name(netdev_);
     int ifindex;
     int error;
+
+    if (netdev_is_flow_api_enabled()) {
+        if (kbits_rate) {
+            VLOG_WARN_RL(&rl, "%s: policing with offload isn't supported",
+                         netdev_name);
+        }
+        return EOPNOTSUPP;
+    }
 
     kbits_burst = (!kbits_rate ? 0       /* Force to 0 if no rate specified. */
                    : !kbits_burst ? 8000 /* Default to 8000 kbits if 0. */
@@ -5406,8 +5413,8 @@ set_flags(const char *name, unsigned int flags)
     return af_inet_ifreq_ioctl(name, &ifr, SIOCSIFFLAGS, "SIOCSIFFLAGS");
 }
 
-static int
-do_get_ifindex(const char *netdev_name)
+int
+linux_get_ifindex(const char *netdev_name)
 {
     struct ifreq ifr;
     int error;
@@ -5430,7 +5437,7 @@ get_ifindex(const struct netdev *netdev_, int *ifindexp)
     struct netdev_linux *netdev = netdev_linux_cast(netdev_);
 
     if (!(netdev->cache_valid & VALID_IFINDEX)) {
-        int ifindex = do_get_ifindex(netdev_get_name(netdev_));
+        int ifindex = linux_get_ifindex(netdev_get_name(netdev_));
 
         if (ifindex < 0) {
             netdev->get_ifindex_error = -ifindex;

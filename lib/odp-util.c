@@ -41,6 +41,7 @@
 #include "util.h"
 #include "uuid.h"
 #include "openvswitch/vlog.h"
+#include "openvswitch/match.h"
 
 VLOG_DEFINE_THIS_MODULE(odp_util);
 
@@ -85,8 +86,8 @@ static void format_geneve_opts(const struct geneve_opt *opt,
 static struct nlattr *generate_all_wildcard_mask(const struct attr_len_tbl tbl[],
                                                  int max, struct ofpbuf *,
                                                  const struct nlattr *key);
-static void format_u128(struct ds *ds, const ovs_u128 *value,
-                        const ovs_u128 *mask, bool verbose);
+static void format_u128(struct ds *d, const ovs_32aligned_u128 *key,
+                        const ovs_32aligned_u128 *mask, bool verbose);
 static int scan_u128(const char *s, ovs_u128 *value, ovs_u128 *mask);
 
 static int parse_odp_action(const char *s, const struct simap *port_names,
@@ -488,8 +489,7 @@ format_odp_tnl_push_header(struct ds *ds, struct ovs_action_push_tnl *data)
 
     if (eth->eth_type == htons(ETH_TYPE_IP)) {
         /* IPv4 */
-        const struct ip_header *ip;
-        ip = (const struct ip_header *) l3;
+        const struct ip_header *ip = l3;
         ds_put_format(ds, "ipv4(src="IP_FMT",dst="IP_FMT",proto=%"PRIu8
                       ",tos=%#"PRIx8",ttl=%"PRIu8",frag=0x%"PRIx16"),",
                       IP_ARGS(get_16aligned_be32(&ip->ip_src)),
@@ -499,16 +499,20 @@ format_odp_tnl_push_header(struct ds *ds, struct ovs_action_push_tnl *data)
                       ntohs(ip->ip_frag_off));
         l4 = (ip + 1);
     } else {
-        const struct ip6_hdr *ip6;
-        ip6 = (const struct ip6_hdr *) l3;
+        const struct ovs_16aligned_ip6_hdr *ip6 = l3;
+        struct in6_addr src, dst;
+        memcpy(&src, &ip6->ip6_src, sizeof src);
+        memcpy(&dst, &ip6->ip6_dst, sizeof dst);
+        uint32_t ipv6_flow = ntohl(get_16aligned_be32(&ip6->ip6_flow));
+
         ds_put_format(ds, "ipv6(src=");
-        ipv6_format_addr(&ip6->ip6_src, ds);
+        ipv6_format_addr(&src, ds);
         ds_put_format(ds, ",dst=");
-        ipv6_format_addr(&ip6->ip6_dst, ds);
+        ipv6_format_addr(&dst, ds);
         ds_put_format(ds, ",label=%i,proto=%"PRIu8",tclass=0x%"PRIx32
                           ",hlimit=%"PRIu8"),",
-                      ntohl(ip6->ip6_flow) & IPV6_LABEL_MASK, ip6->ip6_nxt,
-                      (ntohl(ip6->ip6_flow) >> 20) & 0xff, ip6->ip6_hlim);
+                      ipv6_flow & IPV6_LABEL_MASK, ip6->ip6_nxt,
+                      (ipv6_flow >> 20) & 0xff, ip6->ip6_hlim);
         l4 = (ip6 + 1);
     }
 
@@ -739,7 +743,10 @@ static void
 format_odp_conntrack_action(struct ds *ds, const struct nlattr *attr)
 {
     struct nlattr *a[ARRAY_SIZE(ovs_conntrack_policy)];
-    const ovs_u128 *label;
+    const struct {
+        ovs_32aligned_u128 value;
+        ovs_32aligned_u128 mask;
+    } *label;
     const uint32_t *mark;
     const char *helper;
     uint16_t zone;
@@ -777,7 +784,7 @@ format_odp_conntrack_action(struct ds *ds, const struct nlattr *attr)
         }
         if (label) {
             ds_put_format(ds, "label=");
-            format_u128(ds, label, label + 1, true);
+            format_u128(ds, &label->value, &label->mask, true);
             ds_put_char(ds, ',');
         }
         if (helper) {
@@ -2891,8 +2898,8 @@ format_odp_key_attr(const struct nlattr *a, const struct nlattr *ma,
         break;
 
     case OVS_KEY_ATTR_CT_LABELS: {
-        const ovs_u128 *value = nl_attr_get(a);
-        const ovs_u128 *mask = ma ? nl_attr_get(ma) : NULL;
+        const ovs_32aligned_u128 *value = nl_attr_get(a);
+        const ovs_32aligned_u128 *mask = ma ? nl_attr_get(ma) : NULL;
 
         format_u128(ds, value, mask, verbose);
         break;
@@ -3163,16 +3170,14 @@ generate_all_wildcard_mask(const struct attr_len_tbl tbl[], int max,
 }
 
 static void
-format_u128(struct ds *ds, const ovs_u128 *key, const ovs_u128 *mask,
-            bool verbose)
+format_u128(struct ds *ds, const ovs_32aligned_u128 *key,
+            const ovs_32aligned_u128 *mask, bool verbose)
 {
-    if (verbose || (mask && !ovs_u128_is_zero(*mask))) {
-        ovs_be128 value;
-
-        value = hton128(*key);
+    if (verbose || (mask && !ovs_u128_is_zero(get_32aligned_u128(mask)))) {
+        ovs_be128 value = hton128(get_32aligned_u128(key));
         ds_put_hex(ds, &value, sizeof value);
-        if (mask && !(ovs_u128_is_ones(*mask))) {
-            value = hton128(*mask);
+        if (mask && !(ovs_u128_is_ones(get_32aligned_u128(mask)))) {
+            value = hton128(get_32aligned_u128(mask));
             ds_put_char(ds, '/');
             ds_put_hex(ds, &value, sizeof value);
         }
@@ -4801,9 +4806,7 @@ odp_key_to_dp_packet(const struct nlattr *key, size_t key_len,
             wanted_attrs &= ~(1u << OVS_KEY_ATTR_CT_MARK);
             break;
         case OVS_KEY_ATTR_CT_LABELS: {
-            const ovs_u128 *cl = nl_attr_get(nla);
-
-            md->ct_label = *cl;
+            md->ct_label = nl_attr_get_u128(nla);
             wanted_attrs &= ~(1u << OVS_KEY_ATTR_CT_LABELS);
             break;
         }
@@ -5435,9 +5438,7 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
         expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_CT_MARK;
     }
     if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_CT_LABELS)) {
-        const ovs_u128 *cl = nl_attr_get(attrs[OVS_KEY_ATTR_CT_LABELS]);
-
-        flow->ct_label = *cl;
+        flow->ct_label = nl_attr_get_u128(attrs[OVS_KEY_ATTR_CT_LABELS]);
         expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_CT_LABELS;
     }
     if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4)) {
@@ -5575,6 +5576,61 @@ odp_flow_key_to_mask(const struct nlattr *mask_key, size_t mask_key_len,
 
         return ODP_FIT_PERFECT;
     }
+}
+
+/* Converts the netlink formated key/mask to match.
+ * Fails if odp_flow_key_from_key/mask and odp_flow_key_key/mask
+ * disagree on the acceptable form of flow */
+int
+parse_key_and_mask_to_match(const struct nlattr *key, size_t key_len,
+                            const struct nlattr *mask, size_t mask_len,
+                            struct match *match)
+{
+    enum odp_key_fitness fitness;
+
+    fitness = odp_flow_key_to_flow(key, key_len, &match->flow);
+    if (fitness) {
+        /* This should not happen: it indicates that
+         * odp_flow_key_from_flow() and odp_flow_key_to_flow() disagree on
+         * the acceptable form of a flow.  Log the problem as an error,
+         * with enough details to enable debugging. */
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+
+        if (!VLOG_DROP_ERR(&rl)) {
+            struct ds s;
+
+            ds_init(&s);
+            odp_flow_format(key, key_len, NULL, 0, NULL, &s, true);
+            VLOG_ERR("internal error parsing flow key %s", ds_cstr(&s));
+            ds_destroy(&s);
+        }
+
+        return EINVAL;
+    }
+
+    fitness = odp_flow_key_to_mask(mask, mask_len, &match->wc, &match->flow);
+    if (fitness) {
+        /* This should not happen: it indicates that
+         * odp_flow_key_from_mask() and odp_flow_key_to_mask()
+         * disagree on the acceptable form of a mask.  Log the problem
+         * as an error, with enough details to enable debugging. */
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+
+        if (!VLOG_DROP_ERR(&rl)) {
+            struct ds s;
+
+            ds_init(&s);
+            odp_flow_format(key, key_len, mask, mask_len, NULL, &s,
+                            true);
+            VLOG_ERR("internal error parsing flow mask %s (%s)",
+                     ds_cstr(&s), odp_key_fitness_to_string(fitness));
+            ds_destroy(&s);
+        }
+
+        return EINVAL;
+    }
+
+    return 0;
 }
 
 /* Returns 'fitness' as a string, for use in debug messages. */

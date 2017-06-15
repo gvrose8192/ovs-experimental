@@ -182,6 +182,22 @@ int netdev_init_flow_api(struct netdev *);
 bool netdev_is_flow_api_enabled(void);
 void netdev_set_flow_api_enabled(const struct smap *ovs_other_config);
 
+struct dpif_port;
+int netdev_ports_insert(struct netdev *, const void *obj, struct dpif_port *);
+struct netdev *netdev_ports_get(odp_port_t port, const void *obj);
+int netdev_ports_remove(odp_port_t port, const void *obj);
+odp_port_t netdev_ifindex_to_odp_port(int ifindex);
+struct netdev_flow_dump **netdev_ports_flow_dump_create(const void *obj,
+                                                        int *ports);
+void netdev_ports_flow_flush(const void *obj);
+int netdev_ports_flow_del(const void *obj, const ovs_u128 *ufid,
+                          struct dpif_flow_stats *stats);
+int netdev_ports_flow_get(const void *obj, struct match *match,
+                          struct nlattr **actions,
+                          const ovs_u128 *ufid,
+                          struct dpif_flow_stats *stats,
+                          struct ofpbuf *buf);
+
 /* native tunnel APIs */
 /* Structure to pass parameters required to build a tunnel header. */
 struct netdev_tnl_build_header_params {
