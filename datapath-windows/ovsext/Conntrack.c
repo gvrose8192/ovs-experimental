@@ -214,87 +214,78 @@ OvsCtEntryCreate(OvsForwardingContext *fwdCtx,
                  BOOLEAN *entryCreated)
 {
     POVS_CT_ENTRY entry = NULL;
-    *entryCreated = FALSE;
     UINT32 state = 0;
+    POVS_CT_ENTRY parentEntry;
     PNET_BUFFER_LIST curNbl = fwdCtx->curNbl;
-    switch (ipProto)
+
+    *entryCreated = FALSE;
+    state |= OVS_CS_F_NEW;
+
+    parentEntry = OvsCtRelatedLookup(ctx->key, currentTime);
+    if (parentEntry != NULL) {
+        state |= OVS_CS_F_RELATED;
+    }
+
+    switch (ipProto) {
+    case IPPROTO_TCP:
     {
-        case IPPROTO_TCP:
-        {
-            TCPHdr tcpStorage;
-            const TCPHdr *tcp;
-            tcp = OvsGetTcp(curNbl, l4Offset, &tcpStorage);
-            if (!OvsConntrackValidateTcpPacket(tcp)) {
-                goto invalid;
-            }
-
-            state |= OVS_CS_F_NEW;
-            POVS_CT_ENTRY parentEntry;
-            parentEntry = OvsCtRelatedLookup(ctx->key, currentTime);
-            if (parentEntry != NULL) {
-                state |= OVS_CS_F_RELATED;
-            }
-
-            if (commit) {
-                entry = OvsConntrackCreateTcpEntry(tcp, curNbl, currentTime);
-                if (!entry) {
-                    return NULL;
-                }
-
-                /* Set parent entry for related FTP connections */
-                entry->parent = parentEntry;
-
-                *entryCreated = TRUE;
-            }
+        TCPHdr tcpStorage;
+        const TCPHdr *tcp;
+        tcp = OvsGetTcp(curNbl, l4Offset, &tcpStorage);
+        if (!OvsConntrackValidateTcpPacket(tcp)) {
+            state = OVS_CS_F_INVALID;
             break;
         }
-        case IPPROTO_ICMP:
-        {
-            ICMPHdr storage;
-            const ICMPHdr *icmp;
-            icmp = OvsGetIcmp(curNbl, l4Offset, &storage);
-            if (!OvsConntrackValidateIcmpPacket(icmp)) {
-                goto invalid;
-            }
 
-            state |= OVS_CS_F_NEW;
-            if (commit) {
-                entry = OvsConntrackCreateIcmpEntry(currentTime);
-                if (entry) {
-                    /* XXX Add support for ICMP-Related */
-                    entry->parent = NULL;
-                }
-                *entryCreated = TRUE;
-            }
+        if (commit) {
+            entry = OvsConntrackCreateTcpEntry(tcp, curNbl, currentTime);
+        }
+        break;
+    }
+    case IPPROTO_ICMP:
+    {
+        ICMPHdr storage;
+        const ICMPHdr *icmp;
+        icmp = OvsGetIcmp(curNbl, l4Offset, &storage);
+        if (!OvsConntrackValidateIcmpPacket(icmp)) {
+            state = OVS_CS_F_INVALID;
             break;
         }
-        case IPPROTO_UDP:
-        {
-            state |= OVS_CS_F_NEW;
-            if (commit) {
-                entry = OvsConntrackCreateOtherEntry(currentTime);
-                if (entry) {
-                    /* Default UDP related to NULL until TFTP is supported */
-                    entry->parent = NULL;
-                }
-                *entryCreated = TRUE;
-            }
-            break;
+
+        if (commit) {
+            entry = OvsConntrackCreateIcmpEntry(currentTime);
         }
-        default:
-            goto invalid;
+        break;
+    }
+    case IPPROTO_UDP:
+    {
+        if (commit) {
+            entry = OvsConntrackCreateOtherEntry(currentTime);
+        }
+        break;
+    }
+    default:
+        state = OVS_CS_F_INVALID;
+        break;
     }
 
-    if (commit && !entry) {
-        return NULL;
+    if (state != OVS_CS_F_INVALID && commit) {
+        if (entry) {
+            entry->parent = parentEntry;
+            if (OvsCtAddEntry(entry, ctx, natInfo, currentTime)) {
+                *entryCreated = TRUE;
+            } else {
+                /* Unable to add entry to the list */
+                OvsFreeMemoryWithTag(entry, OVS_CT_POOL_TAG);
+                state = OVS_CS_F_INVALID;
+                entry = NULL;
+            }
+        } else {
+            /* OvsAllocateMemoryWithTag returned NULL; treat as invalid */
+            state = OVS_CS_F_INVALID;
+        }
     }
-    if (entry && !OvsCtAddEntry(entry, ctx, natInfo, currentTime)) {
-        return NULL;
-    }
-    OvsCtUpdateFlowKey(key, state, ctx->key.zone, 0, NULL);
-    return entry;
-invalid:
-    state |= OVS_CS_F_INVALID;
+
     OvsCtUpdateFlowKey(key, state, ctx->key.zone, 0, NULL);
     return entry;
 }
@@ -307,24 +298,23 @@ OvsCtUpdateEntry(OVS_CT_ENTRY* entry,
                  BOOLEAN reply,
                  UINT64 now)
 {
-    switch (ipProto)
+    switch (ipProto) {
+    case IPPROTO_TCP:
     {
-        case IPPROTO_TCP:
-        {
-            TCPHdr tcpStorage;
-            const TCPHdr *tcp;
-            tcp = OvsGetTcp(nbl, l4Offset, &tcpStorage);
-            if (!tcp) {
-                return CT_UPDATE_INVALID;
-            }
-            return OvsConntrackUpdateTcpEntry(entry, tcp, nbl, reply, now);
-        }
-        case IPPROTO_ICMP:
-            return OvsConntrackUpdateIcmpEntry(entry, reply, now);
-        case IPPROTO_UDP:
-            return OvsConntrackUpdateOtherEntry(entry, reply, now);
-        default:
+        TCPHdr tcpStorage;
+        const TCPHdr *tcp;
+        tcp = OvsGetTcp(nbl, l4Offset, &tcpStorage);
+        if (!tcp) {
             return CT_UPDATE_INVALID;
+        }
+        return OvsConntrackUpdateTcpEntry(entry, tcp, nbl, reply, now);
+    }
+    case IPPROTO_ICMP:
+        return OvsConntrackUpdateIcmpEntry(entry, reply, now);
+    case IPPROTO_UDP:
+        return OvsConntrackUpdateOtherEntry(entry, reply, now);
+    default:
+        return CT_UPDATE_INVALID;
     }
 }
 
@@ -517,32 +507,32 @@ OvsCtSetupLookupCtx(OvsFlowKey *flowKey,
             /* Related bit is set when ICMP has an error */
             /* XXX parse out the appropriate src and dst from inner pkt */
             switch (icmp->type) {
-               case ICMP4_ECHO_REQUEST:
-               case ICMP4_ECHO_REPLY:
-               case ICMP4_TIMESTAMP_REQUEST:
-               case ICMP4_TIMESTAMP_REPLY:
-               case ICMP4_INFO_REQUEST:
-               case ICMP4_INFO_REPLY:
-                   if (icmp->code != 0) {
-                       return NDIS_STATUS_INVALID_PACKET;
-                   }
-                   /* Separate ICMP connection: identified using id */
-                   ctx->key.dst.icmp_id = icmp->fields.echo.id;
-                   ctx->key.src.icmp_id = icmp->fields.echo.id;
-                   ctx->key.src.icmp_type = icmp->type;
-                   ctx->key.dst.icmp_type = OvsReverseIcmpType(icmp->type);
-                   break;
-               case ICMP4_DEST_UNREACH:
-               case ICMP4_TIME_EXCEEDED:
-               case ICMP4_PARAM_PROB:
-               case ICMP4_SOURCE_QUENCH:
-               case ICMP4_REDIRECT: {
-                   /* XXX Handle inner packet */
-                   ctx->related = TRUE;
-                   break;
-               }
-               default:
-                   ctx->related = FALSE;
+            case ICMP4_ECHO_REQUEST:
+            case ICMP4_ECHO_REPLY:
+            case ICMP4_TIMESTAMP_REQUEST:
+            case ICMP4_TIMESTAMP_REPLY:
+            case ICMP4_INFO_REQUEST:
+            case ICMP4_INFO_REPLY:
+                if (icmp->code != 0) {
+                    return NDIS_STATUS_INVALID_PACKET;
+                }
+                /* Separate ICMP connection: identified using id */
+                ctx->key.dst.icmp_id = icmp->fields.echo.id;
+                ctx->key.src.icmp_id = icmp->fields.echo.id;
+                ctx->key.src.icmp_type = icmp->type;
+                ctx->key.dst.icmp_type = OvsReverseIcmpType(icmp->type);
+                break;
+            case ICMP4_DEST_UNREACH:
+            case ICMP4_TIME_EXCEEDED:
+            case ICMP4_PARAM_PROB:
+            case ICMP4_SOURCE_QUENCH:
+            case ICMP4_REDIRECT: {
+                /* XXX Handle inner packet */
+                ctx->related = TRUE;
+                break;
+            }
+            default:
+                ctx->related = FALSE;
             }
         }
     } else if (flowKey->l2.dlType == htons(ETH_TYPE_IPV6)) {
@@ -659,13 +649,15 @@ static __inline VOID
 OvsConntrackSetMark(OvsFlowKey *key,
                     POVS_CT_ENTRY entry,
                     UINT32 value,
-                    UINT32 mask)
+                    UINT32 mask,
+                    BOOLEAN *markChanged)
 {
     UINT32 newMark;
     newMark = value | (entry->mark & ~(mask));
     if (entry->mark != newMark) {
         entry->mark = newMark;
         key->ct.mark = newMark;
+        *markChanged = TRUE;
     }
 }
 
@@ -673,7 +665,8 @@ static __inline void
 OvsConntrackSetLabels(OvsFlowKey *key,
                       POVS_CT_ENTRY entry,
                       struct ovs_key_ct_labels *val,
-                      struct ovs_key_ct_labels *mask)
+                      struct ovs_key_ct_labels *mask,
+                      BOOLEAN *labelChanged)
 {
     ovs_u128 v, m, pktMdLabel = {0};
     memcpy(&v, val, sizeof v);
@@ -682,6 +675,10 @@ OvsConntrackSetLabels(OvsFlowKey *key,
     pktMdLabel.u64.lo = v.u64.lo | (pktMdLabel.u64.lo & ~(m.u64.lo));
     pktMdLabel.u64.hi = v.u64.hi | (pktMdLabel.u64.hi & ~(m.u64.hi));
 
+    if (!NdisEqualMemory(&entry->labels, &pktMdLabel,
+                         sizeof(struct ovs_key_ct_labels))) {
+        *labelChanged = TRUE;
+    }
     NdisMoveMemory(&entry->labels, &pktMdLabel,
                    sizeof(struct ovs_key_ct_labels));
     NdisMoveMemory(&key->ct.labels, &pktMdLabel,
@@ -698,9 +695,11 @@ OvsCtExecute_(OvsForwardingContext *fwdCtx,
               MD_MARK *mark,
               MD_LABELS *labels,
               PCHAR helper,
-              PNAT_ACTION_INFO natInfo)
+              PNAT_ACTION_INFO natInfo,
+              BOOLEAN postUpdateEvent)
 {
     NDIS_STATUS status = NDIS_STATUS_SUCCESS;
+    BOOLEAN triggerUpdateEvent = FALSE;
     POVS_CT_ENTRY entry = NULL;
     PNET_BUFFER_LIST curNbl = fwdCtx->curNbl;
     OvsConntrackKeyLookupCtx ctx = { 0 };
@@ -752,11 +751,13 @@ OvsCtExecute_(OvsForwardingContext *fwdCtx,
     }
 
     if (entry && mark) {
-        OvsConntrackSetMark(key, entry, mark->value, mark->mask);
+        OvsConntrackSetMark(key, entry, mark->value, mark->mask,
+                            &triggerUpdateEvent);
     }
 
     if (entry && labels) {
-        OvsConntrackSetLabels(key, entry, &labels->value, &labels->mask);
+        OvsConntrackSetLabels(key, entry, &labels->value, &labels->mask,
+                              &triggerUpdateEvent);
     }
 
     if (entry && OvsDetectFtpPacket(key)) {
@@ -790,6 +791,9 @@ OvsCtExecute_(OvsForwardingContext *fwdCtx,
     if (entryCreated && entry) {
         OvsPostCtEventEntry(entry, OVS_EVENT_CT_NEW);
     }
+    if (postUpdateEvent && entry && !entryCreated && triggerUpdateEvent) {
+        OvsPostCtEventEntry(entry, OVS_EVENT_CT_UPDATE);
+    }
 
     NdisReleaseRWLock(ovsConntrackLockObj, &lockState);
 
@@ -811,7 +815,9 @@ OvsExecuteConntrackAction(OvsForwardingContext *fwdCtx,
     PNL_ATTR ctAttr;
     BOOLEAN commit = FALSE;
     BOOLEAN force = FALSE;
+    BOOLEAN postUpdateEvent = FALSE;
     UINT16 zone = 0;
+    UINT32 eventmask = 0;
     MD_MARK *mark = NULL;
     MD_LABELS *labels = NULL;
     PCHAR helper = NULL;
@@ -922,9 +928,17 @@ OvsExecuteConntrackAction(OvsForwardingContext *fwdCtx,
         /* Force implicitly means commit */
         commit = TRUE;
     }
+    ctAttr = NlAttrFindNested(a, OVS_CT_ATTR_EVENTMASK);
+    if (ctAttr) {
+        eventmask = NlAttrGetU32(ctAttr);
+        /* Only mark and label updates are supported. */
+        if (eventmask & (1 << IPCT_MARK | 1 << IPCT_LABEL))
+            postUpdateEvent = TRUE;
+    }
     /* If newNbl is not allocated, use the current Nbl*/
     status = OvsCtExecute_(fwdCtx, key, layers,
-                           commit, force, zone, mark, labels, helper, &natActionInfo);
+                           commit, force, zone, mark, labels, helper, &natActionInfo,
+                           postUpdateEvent);
     return status;
 }
 
@@ -1266,6 +1280,7 @@ OvsCreateNlMsgFromCtEntry(POVS_CT_ENTRY entry,
     NDIS_STATUS status;
     UINT64 currentTime, expiration;
     UINT16 nlmsgType;
+    UINT16 nlmsgFlags = NLM_F_CREATE;
     NdisGetCurrentSystemTime((LARGE_INTEGER *)&currentTime);
     UINT8 nfgenFamily = 0;
     if (entry->key.dl_type == htons(ETH_TYPE_IPV4)) {
@@ -1276,7 +1291,7 @@ OvsCreateNlMsgFromCtEntry(POVS_CT_ENTRY entry,
 
     NlBufInit(&nlBuf, outBuffer, outBufLen);
     /* Mimic netfilter */
-    if (eventType == OVS_EVENT_CT_NEW) {
+    if (eventType == OVS_EVENT_CT_NEW || eventType == OVS_EVENT_CT_UPDATE) {
         nlmsgType = (UINT16) (NFNL_SUBSYS_CTNETLINK << 8 | IPCTNL_MSG_CT_NEW);
     } else if (eventType == OVS_EVENT_CT_DELETE) {
         nlmsgType = (UINT16) (NFNL_SUBSYS_CTNETLINK << 8 | IPCTNL_MSG_CT_DELETE);
@@ -1284,7 +1299,14 @@ OvsCreateNlMsgFromCtEntry(POVS_CT_ENTRY entry,
         return STATUS_INVALID_PARAMETER;
     }
 
-    ok = NlFillOvsMsgForNfGenMsg(&nlBuf, nlmsgType, NLM_F_CREATE,
+    if (eventType == OVS_EVENT_CT_UPDATE) {
+        /* In netlink-conntrack.c IPCTNL_MSG_CT_NEW msg type is used to
+         * differentiate between OVS_EVENT_CT_NEW and OVS_EVENT_CT_UPDATE
+         * events based on nlmsgFlags, unset it to notify an update event.
+         */
+        nlmsgFlags = 0;
+    }
+    ok = NlFillOvsMsgForNfGenMsg(&nlBuf, nlmsgType, nlmsgFlags,
                                  nlmsgSeq, nlmsgPid, nfgenFamily,
                                  nfGenVersion, dpIfIndex);
     if (!ok) {
