@@ -469,7 +469,11 @@ netdev_set_config(struct netdev *netdev, const struct smap *args, char **errp)
                           "%s: could not set configuration (%s)",
                           netdev_get_name(netdev), ovs_strerror(error));
             if (verbose_error) {
-                *errp = verbose_error;
+                if (errp) {
+                    *errp = verbose_error;
+                } else {
+                    free(verbose_error);
+                }
             }
         }
         return error;
@@ -725,6 +729,14 @@ netdev_set_tx_multiq(struct netdev *netdev, unsigned int n_txq)
     }
 
     return error;
+}
+
+enum netdev_pt_mode
+netdev_get_pt_mode(const struct netdev *netdev)
+{
+    return (netdev->netdev_class->get_pt_mode
+            ? netdev->netdev_class->get_pt_mode(netdev)
+            : NETDEV_PT_LEGACY_L2);
 }
 
 /* Sends 'batch' on 'netdev'.  Returns 0 if successful (for every packet),
@@ -1955,7 +1967,8 @@ netdev_get_addrs(const char dev[], struct in6_addr **paddr,
     for (ifa = if_addr_list; ifa; ifa = ifa->ifa_next) {
         int family;
 
-        if (strncmp(ifa->ifa_name, dev, IFNAMSIZ) || ifa->ifa_addr == NULL) {
+        if (!ifa->ifa_name || !ifa->ifa_addr || !ifa->ifa_netmask
+            || strncmp(ifa->ifa_name, dev, IFNAMSIZ)) {
             continue;
         }
 

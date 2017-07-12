@@ -81,6 +81,7 @@ Christoph Jaeger                cj@linux.com
 Chris Wright                    chrisw@sous-sol.org
 Chuck Short                     zulcss@ubuntu.com
 Ciara Loftus                    ciara.loftus@intel.com
+Clint Byrum                     clint@fewbar.com
 Cong Wang                       amwang@redhat.com
 Conner Herriges                 conner.herriges@ibm.com
 Damien Millescamps              damien.millescamps@6wind.com
@@ -158,6 +159,7 @@ Jan Scheurich                   jan.scheurich@ericsson.com
 Jan Vansteenkiste               jan@vstone.eu
 Jarno Rajahalme                 jarno@ovn.org
 Jason Kölker                    jason@koelker.net
+Jason Wessel                    jason.wessel@windriver.com
 Jasper Capel                    jasper@capel.tv
 Jean Tourrilhes                 jt@hpl.hp.com
 Jeremy Stribling                strib@nicira.com
@@ -340,6 +342,7 @@ xushengping                     shengping.xu@huawei.com
 yinpeijun                       yinpeijun@huawei.com
 zangchuanqiang                  zangchuanqiang@huawei.com
 zhaojingjing                    zhao.jingjing1@zte.com.cn
+zhongbaisong                    zhongbaisong@huawei.com
 =============================== ===============================================
 
 The following additional people are mentioned in commit logs as having
@@ -445,6 +448,7 @@ John Darrington                 john@darrington.wattle.id.au
 John Galgay                     john@galgay.net
 John Hurley                     john.hurley@netronome.com
 John Reumann                    nofutznetworks@gmail.com
+Karthik Sundaravel              ksundara@redhat.com
 Kashyap Thimmaraju              kashyap.thimmaraju@sec.t-labs.tu-berlin.de
 Keith Holleman                  hollemanietf@gmail.com
 Kevin Lin                       kevinlin@berkeley.edu

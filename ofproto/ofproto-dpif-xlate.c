@@ -165,7 +165,7 @@ struct xport {
 
     bool may_enable;                 /* May be enabled in bonds. */
     bool is_tunnel;                  /* Is a tunnel port. */
-    bool is_layer3;                  /* Is a layer 3 port. */
+    enum netdev_pt_mode pt_mode;     /* packet_type handling. */
 
     struct cfm *cfm;                 /* CFM handle or null. */
     struct bfd *bfd;                 /* BFD handle or null. */
@@ -359,6 +359,7 @@ struct xlate_ctx {
     uint32_t dp_hash_basis;
     struct ofpbuf frozen_actions;
     const struct ofpact_controller *pause;
+    struct flow *paused_flow;
 
     /* True if a packet was but is no longer MPLS (due to an MPLS pop action).
      * This is a trigger for recirculation in cases where translating an action
@@ -905,7 +906,7 @@ xlate_xport_set(struct xport *xport, odp_port_t odp_port,
     xport->state = state;
     xport->stp_port_no = stp_port_no;
     xport->is_tunnel = is_tunnel;
-    xport->is_layer3 = netdev_vport_is_layer3(netdev);
+    xport->pt_mode = netdev_get_pt_mode(netdev);
     xport->may_enable = may_enable;
     xport->odp_port = odp_port;
 
@@ -2691,7 +2692,10 @@ xlate_normal(struct xlate_ctx *ctx)
 
     /* Learn source MAC. */
     bool is_grat_arp = is_gratuitous_arp(flow, wc);
-    if (ctx->xin->allow_side_effects && !in_port->is_layer3) {
+    if (ctx->xin->allow_side_effects
+        && flow->packet_type == htonl(PT_ETH)
+        && in_port->pt_mode != NETDEV_PT_LEGACY_L3
+    ) {
         update_learning_table(ctx, in_xbundle, flow->dl_src, vlan,
                               is_grat_arp);
     }
@@ -3351,15 +3355,19 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
         return;
     }
 
-    if (flow->packet_type == htonl(PT_ETH) && xport->is_layer3) {
-        /* Ethernet packet to L3 outport -> pop ethernet header. */
-        flow->packet_type = PACKET_TYPE_BE(OFPHTN_ETHERTYPE,
-                                           ntohs(flow->dl_type));
-    } else if (flow->packet_type != htonl(PT_ETH) && !xport->is_layer3) {
-        /* L2 outport and non-ethernet packet_type -> add dummy eth header. */
-        flow->packet_type = htonl(PT_ETH);
-        flow->dl_dst = eth_addr_zero;
-        flow->dl_src = eth_addr_zero;
+    if (flow->packet_type == htonl(PT_ETH)) {
+        /* Strip Ethernet header for legacy L3 port. */
+        if (xport->pt_mode == NETDEV_PT_LEGACY_L3) {
+            flow->packet_type = PACKET_TYPE_BE(OFPHTN_ETHERTYPE,
+                                               ntohs(flow->dl_type));
+        }
+    } else {
+        /* Add dummy Ethernet header for legacy L2 port. */
+        if (xport->pt_mode == NETDEV_PT_LEGACY_L2) {
+            flow->packet_type = htonl(PT_ETH);
+            flow->dl_dst = eth_addr_zero;
+            flow->dl_src = eth_addr_zero;
+        }
     }
 
     if (xport->peer) {
@@ -4252,11 +4260,6 @@ execute_controller_action(struct xlate_ctx *ctx, int len,
         return;
     }
 
-    if (packet->packet_type != htonl(PT_ETH)) {
-        dp_packet_delete(packet);
-        return;
-    }
-
     /* A packet sent by an action in a table-miss rule is considered an
      * explicit table miss.  OpenFlow before 1.3 doesn't have that concept so
      * it will get translated back to OFPR_ACTION for those versions. */
@@ -4341,7 +4344,7 @@ emit_continuation(struct xlate_ctx *ctx, const struct frozen_state *state)
             .max_len = UINT16_MAX,
         },
     };
-    flow_get_metadata(&ctx->xin->flow, &am->pin.up.public.flow_metadata);
+    flow_get_metadata(ctx->paused_flow, &am->pin.up.public.flow_metadata);
 
     /* Async messages are only sent once, so if we send one now, no
      * xlate cache entry is created.  */
@@ -5614,6 +5617,7 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             if (controller->pause) {
                 ctx->pause = controller;
                 ctx->xout->slow |= SLOW_CONTROLLER;
+                *ctx->paused_flow = ctx->xin->flow;
                 ctx_trigger_freeze(ctx);
                 a = ofpact_next(a);
             } else {
@@ -6125,8 +6129,11 @@ xlate_wc_init(struct xlate_ctx *ctx)
     flow_wildcards_init_catchall(ctx->wc);
 
     /* Some fields we consider to always be examined. */
+    WC_MASK_FIELD(ctx->wc, packet_type);
     WC_MASK_FIELD(ctx->wc, in_port);
-    WC_MASK_FIELD(ctx->wc, dl_type);
+    if (is_ethernet(&ctx->xin->flow, NULL)) {
+        WC_MASK_FIELD(ctx->wc, dl_type);
+    }
     if (is_ip_any(&ctx->xin->flow)) {
         WC_MASK_FIELD_MASK(ctx->wc, nw_frag, FLOW_NW_FRAG_MASK);
     }
@@ -6158,6 +6165,7 @@ xlate_wc_finish(struct xlate_ctx *ctx)
     if (ctx->xin->upcall_flow->packet_type != htonl(PT_ETH)) {
         ctx->wc->masks.dl_dst = eth_addr_zero;
         ctx->wc->masks.dl_src = eth_addr_zero;
+        ctx->wc->masks.dl_type = 0;
     }
 
     /* ICMPv4 and ICMPv6 have 8-bit "type" and "code" fields.  struct flow
@@ -6222,6 +6230,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     uint64_t frozen_actions_stub[1024 / 8];
     uint64_t actions_stub[256 / 8];
     struct ofpbuf scratch_actions = OFPBUF_STUB_INITIALIZER(actions_stub);
+    struct flow paused_flow;
     struct xlate_ctx ctx = {
         .xin = xin,
         .xout = xout,
@@ -6255,6 +6264,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         .recirc_update_dp_hash = false,
         .frozen_actions = OFPBUF_STUB_INITIALIZER(frozen_actions_stub),
         .pause = NULL,
+        .paused_flow = &paused_flow,
 
         .was_mpls = false,
         .conntracked = false,
@@ -6390,8 +6400,8 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     struct xport *in_port = get_ofp_port(xbridge,
                                          ctx.base_flow.in_port.ofp_port);
 
-    if (flow->packet_type != htonl(PT_ETH) && in_port && in_port->is_layer3 &&
-        ctx.table_id == 0) {
+    if (flow->packet_type != htonl(PT_ETH) && in_port &&
+        in_port->pt_mode == NETDEV_PT_LEGACY_L3 && ctx.table_id == 0) {
         /* Add dummy Ethernet header to non-L2 packet if it's coming from a
          * L3 port. So all packets will be L2 packets for lookup.
          * The dl_type has already been set from the packet_type. */

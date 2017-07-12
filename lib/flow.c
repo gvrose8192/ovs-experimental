@@ -994,6 +994,10 @@ flow_get_metadata(const struct flow *flow, struct match *flow_metadata)
     }
 
     match_set_in_port(flow_metadata, flow->in_port.ofp_port);
+    if (flow->packet_type != htonl(PT_ETH)) {
+        match_set_packet_type(flow_metadata, flow->packet_type);
+    }
+
     if (flow->ct_state != 0) {
         match_set_ct_state(flow_metadata, flow->ct_state);
         if (is_ct_valid(flow, NULL, NULL) && flow->ct_nw_proto != 0) {
@@ -1150,6 +1154,38 @@ format_flags_masked(struct ds *ds, const char *name,
         ds_put_format(ds, "%s%s", (flags & bit) ? "+" : "-",
                       s ? s : "[Unknown]");
         mask &= ~bit;
+    }
+}
+
+static void
+put_u16_masked(struct ds *s, uint16_t value, uint16_t mask)
+{
+    if (!mask) {
+        ds_put_char(s, '*');
+    } else {
+        if (value > 9) {
+            ds_put_format(s, "0x%"PRIx16, value);
+        } else {
+            ds_put_format(s, "%"PRIu16, value);
+        }
+
+        if (mask != UINT16_MAX) {
+            ds_put_format(s, "/0x%"PRIx16, mask);
+        }
+    }
+}
+
+void
+format_packet_type_masked(struct ds *s, ovs_be32 value, ovs_be32 mask)
+{
+    if (value == htonl(PT_ETH) && mask == OVS_BE32_MAX) {
+        ds_put_cstr(s, "eth");
+    } else {
+        ds_put_cstr(s, "packet_type=(");
+        put_u16_masked(s, pt_ns(value), pt_ns(mask));
+        ds_put_char(s, ',');
+        put_u16_masked(s, pt_ns_type(value), pt_ns_type(mask));
+        ds_put_char(s, ')');
     }
 }
 
@@ -1405,6 +1441,8 @@ void
 flow_wildcards_init_for_packet(struct flow_wildcards *wc,
                                const struct flow *flow)
 {
+    ovs_be16 dl_type = OVS_BE16_MAX;
+
     memset(&wc->masks, 0x0, sizeof wc->masks);
 
     /* Update this function whenever struct flow changes. */
@@ -1425,7 +1463,6 @@ flow_wildcards_init_for_packet(struct flow_wildcards *wc,
         WC_MASK_FIELD(wc, tunnel.tp_dst);
         WC_MASK_FIELD(wc, tunnel.gbp_id);
         WC_MASK_FIELD(wc, tunnel.gbp_flags);
-        WC_MASK_FIELD(wc, packet_type);
 
         if (!(flow->tunnel.flags & FLOW_TNL_F_UDPIF)) {
             if (flow->tunnel.metadata.present.map) {
@@ -1457,25 +1494,30 @@ flow_wildcards_init_for_packet(struct flow_wildcards *wc,
 
     /* actset_output wildcarded. */
 
-    WC_MASK_FIELD(wc, dl_dst);
-    WC_MASK_FIELD(wc, dl_src);
-    WC_MASK_FIELD(wc, dl_type);
-
-    /* No need to set mask of inner VLANs that don't exist. */
-    for (int i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
-        /* Always show the first zero VLAN. */
-        WC_MASK_FIELD(wc, vlans[i]);
-        if (flow->vlans[i].tci == htons(0)) {
-            break;
+    WC_MASK_FIELD(wc, packet_type);
+    if (flow->packet_type == htonl(PT_ETH)) {
+        WC_MASK_FIELD(wc, dl_dst);
+        WC_MASK_FIELD(wc, dl_src);
+        WC_MASK_FIELD(wc, dl_type);
+        /* No need to set mask of inner VLANs that don't exist. */
+        for (int i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+            /* Always show the first zero VLAN. */
+            WC_MASK_FIELD(wc, vlans[i]);
+            if (flow->vlans[i].tci == htons(0)) {
+                break;
+            }
         }
+        dl_type = flow->dl_type;
+    } else {
+        dl_type = pt_ns_type_be(flow->packet_type);
     }
 
-    if (flow->dl_type == htons(ETH_TYPE_IP)) {
+    if (dl_type == htons(ETH_TYPE_IP)) {
         WC_MASK_FIELD(wc, nw_src);
         WC_MASK_FIELD(wc, nw_dst);
         WC_MASK_FIELD(wc, ct_nw_src);
         WC_MASK_FIELD(wc, ct_nw_dst);
-    } else if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
+    } else if (dl_type == htons(ETH_TYPE_IPV6)) {
         WC_MASK_FIELD(wc, ipv6_src);
         WC_MASK_FIELD(wc, ipv6_dst);
         WC_MASK_FIELD(wc, ipv6_label);
@@ -1487,15 +1529,15 @@ flow_wildcards_init_for_packet(struct flow_wildcards *wc,
             WC_MASK_FIELD(wc, ct_ipv6_src);
             WC_MASK_FIELD(wc, ct_ipv6_dst);
         }
-    } else if (flow->dl_type == htons(ETH_TYPE_ARP) ||
-               flow->dl_type == htons(ETH_TYPE_RARP)) {
+    } else if (dl_type == htons(ETH_TYPE_ARP) ||
+               dl_type == htons(ETH_TYPE_RARP)) {
         WC_MASK_FIELD(wc, nw_src);
         WC_MASK_FIELD(wc, nw_dst);
         WC_MASK_FIELD(wc, nw_proto);
         WC_MASK_FIELD(wc, arp_sha);
         WC_MASK_FIELD(wc, arp_tha);
         return;
-    } else if (eth_type_mpls(flow->dl_type)) {
+    } else if (eth_type_mpls(dl_type)) {
         for (int i = 0; i < FLOW_MAX_MPLS_LABELS; i++) {
             WC_MASK_FIELD(wc, mpls_lse[i]);
             if (flow->mpls_lse[i] & htonl(MPLS_BOS_MASK)) {
@@ -2032,7 +2074,7 @@ flow_mask_hash_fields(const struct flow *flow, struct flow_wildcards *wc,
             memset(&wc->masks.tp_src, 0xff, sizeof wc->masks.tp_src);
             memset(&wc->masks.tp_dst, 0xff, sizeof wc->masks.tp_dst);
         }
-        /* no break */
+        /* fall through */
     case NX_HASH_FIELDS_SYMMETRIC_L3L4:
         if (flow->dl_type == htons(ETH_TYPE_IP)) {
             memset(&wc->masks.nw_src, 0xff, sizeof wc->masks.nw_src);

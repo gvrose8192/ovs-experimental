@@ -100,6 +100,15 @@ static bool should_log_flow_message(const struct vlog_module *module,
 /* Incremented whenever tnl route, arp, etc changes. */
 struct seq *tnl_conf_seq;
 
+static bool
+dpif_is_internal_port(const char *type)
+{
+    /* For userspace datapath, tap devices are the equivalent
+     * of internal devices in the kernel datapath, so both
+     * these types are 'internal' devices. */
+    return !strcmp(type, "internal") || !strcmp(type, "tap");
+}
+
 static void
 dp_initialize(void)
 {
@@ -350,7 +359,7 @@ do_open(const char *name, const char *type, bool create, struct dpif **dpifp)
             struct netdev *netdev;
             int err;
 
-            if (!strcmp(dpif_port.type, "internal")) {
+            if (dpif_is_internal_port(dpif_port.type)) {
                 continue;
             }
 
@@ -360,7 +369,8 @@ do_open(const char *name, const char *type, bool create, struct dpif **dpifp)
                 netdev_ports_insert(netdev, DPIF_HMAP_KEY(dpif), &dpif_port);
                 netdev_close(netdev);
             } else {
-                VLOG_WARN("could not open netdev %s type %s", name, type);
+                VLOG_WARN("could not open netdev %s type %s: %s",
+			  dpif_port.name, dpif_port.type, ovs_strerror(err));
             }
         }
     } else {
@@ -556,7 +566,8 @@ dpif_port_add(struct dpif *dpif, struct netdev *netdev, odp_port_t *port_nop)
         VLOG_DBG_RL(&dpmsg_rl, "%s: added %s as port %"PRIu32,
                     dpif_name(dpif), netdev_name, port_no);
 
-        if (strcmp(netdev_get_type(netdev), "internal")) {
+        if (!dpif_is_internal_port(netdev_get_type(netdev))) {
+
             struct dpif_port dpif_port;
 
             dpif_port.type = CONST_CAST(char *, netdev_get_type(netdev));

@@ -365,7 +365,11 @@ enum ovs_key_attr {
 	OVS_KEY_ATTR_TUNNEL_INFO,  /* struct ovs_tunnel_info */
 #endif
 
+#ifndef __KERNEL__
+	/* Only used within userspace data path. */
 	OVS_KEY_ATTR_PACKET_TYPE,  /* be32 packet type */
+#endif
+
 	__OVS_KEY_ATTR_MAX
 };
 
@@ -837,8 +841,8 @@ enum ovs_nat_attr {
  * is copied from the value to the packet header field, rest of the bits are
  * left unchanged.  The non-masked value bits must be passed in as zeroes.
  * Masking is not supported for the %OVS_KEY_ATTR_TUNNEL attribute.
- * @OVS_ACTION_RECIRC: Recirculate within the data path.
- * @OVS_ACTION_HASH: Compute and set flow hash value.
+ * @OVS_ACTION_ATTR_RECIRC: Recirculate within the data path.
+ * @OVS_ACTION_ATTR_HASH: Compute and set flow hash value.
  * @OVS_ACTION_ATTR_PUSH_MPLS: Push a new MPLS label stack entry onto the
  * top of the packets MPLS label stack.  Set the ethertype of the
  * encapsulating frame to either %ETH_P_MPLS_UC or %ETH_P_MPLS_MC to
