@@ -1021,6 +1021,7 @@ sock_strerror(int error)
 #endif
 }
 
+#ifndef _WIN32 //Avoid using sendmsg on Windows entirely
 static int
 emulate_sendmmsg(int fd, struct mmsghdr *msgs, unsigned int n,
                  unsigned int flags)
@@ -1042,6 +1043,9 @@ sendmmsg(int fd, struct mmsghdr *msgs, unsigned int n, unsigned int flags)
     return emulate_sendmmsg(fd, msgs, n, flags);
 }
 #else
+/* sendmmsg was redefined in lib/socket-util.c, should undef sendmmsg here
+ * to avoid recursion */
+#undef sendmmsg
 int
 wrap_sendmmsg(int fd, struct mmsghdr *msgs, unsigned int n, unsigned int flags)
 {
@@ -1057,4 +1061,5 @@ wrap_sendmmsg(int fd, struct mmsghdr *msgs, unsigned int n, unsigned int flags)
     }
     return emulate_sendmmsg(fd, msgs, n, flags);
 }
+#endif
 #endif

@@ -352,7 +352,7 @@ struct dp_netdev_port {
     struct hmap_node node;      /* Node in dp_netdev's 'ports'. */
     struct netdev_saved_flags *sf;
     struct dp_netdev_rxq *rxqs;
-    unsigned n_rxq;             /* Number of elements in 'rxq' */
+    unsigned n_rxq;             /* Number of elements in 'rxqs' */
     bool dynamic_txqs;          /* If true XPS will be used. */
     unsigned *txq_used;         /* Number of threads that use each tx queue. */
     struct ovs_mutex txq_used_mutex;
@@ -2419,6 +2419,7 @@ dp_netdev_flow_add(struct dp_netdev_pmd_thread *pmd,
         ds_put_cstr(&ds, "flow match: ");
         miniflow_expand(&flow->cr.flow.mf, &m.flow);
         miniflow_expand(&flow->cr.mask->mf, &m.wc.masks);
+        memset(&m.tun_md, 0, sizeof m.tun_md);
         match_format(&m, NULL, &ds, OFP_DEFAULT_PRIORITY);
 
         VLOG_DBG("%s", ds_cstr(&ds));
@@ -3429,8 +3430,8 @@ reconfigure_datapath(struct dp_netdev *dp)
      * need reconfiguration. */
 
     /* Check for all the ports that need reconfiguration.  We cache this in
-     * 'port->reconfigure', because netdev_is_reconf_required() can change at
-     * any time. */
+     * 'port->need_reconfigure', because netdev_is_reconf_required() can
+     * change at any time. */
     HMAP_FOR_EACH (port, node, &dp->ports) {
         if (netdev_is_reconf_required(port->netdev)) {
             port->need_reconfigure = true;

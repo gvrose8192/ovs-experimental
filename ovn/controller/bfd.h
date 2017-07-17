@@ -1,5 +1,4 @@
-
-/* Copyright (c) 2015, 2016 Nicira, Inc.
+/* Copyright (c) 2017 Red Hat, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,27 +13,22 @@
  * limitations under the License.
  */
 
-#ifndef PINCTRL_H
-#define PINCTRL_H 1
-
-#include <stdint.h>
-
-#include "lib/sset.h"
-#include "openvswitch/meta-flow.h"
+#ifndef OVN_BFD_H
+#define OVN_BFD_H 1
 
 struct chassis_index;
 struct controller_ctx;
 struct hmap;
-struct lport_index;
+struct ovsdb_idl;
 struct ovsrec_bridge;
 struct sbrec_chassis;
+struct sset;
 
-void pinctrl_init(void);
-void pinctrl_run(struct controller_ctx *, const struct lport_index *,
-                 const struct ovsrec_bridge *, const struct sbrec_chassis *,
-                 const struct chassis_index *, struct hmap *local_datapaths,
-                 struct sset *active_tunnels);
-void pinctrl_wait(struct controller_ctx *);
-void pinctrl_destroy(void);
+void bfd_register_ovs_idl(struct ovsdb_idl *);
+void bfd_run(struct controller_ctx *ctx, const struct ovsrec_bridge *br_int,
+             const struct sbrec_chassis *chassis_rec,
+             struct hmap *local_datapaths, const struct chassis_index *);
+void  bfd_calculate_active_tunnels(const struct ovsrec_bridge *br_int,
+                                   struct sset *active_tunnels);
 
-#endif /* ovn/pinctrl.h */
+#endif
