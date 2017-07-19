@@ -6981,7 +6981,7 @@ test_ip_packet()
 
 test_ip_packet gw1 gw2
 
-ovn-nbctl --wait=hv \
+ovn-nbctl --timeout=3 --wait=hv \
     --id=@gc0 create Gateway_Chassis name=alice_gw1 \
                                      chassis_name=gw1 \
                                      priority=10 -- \
@@ -7333,7 +7333,7 @@ OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [hv2-vif1.expected])
 AT_CHECK([ovn-sbctl --bare --columns _uuid find Port_Binding logical_port=cr-alice | wc --lines], [0], [1
 ])
 
-ovn-nbctl --wait=sb remove Logical_Router_Port alice options redirect-chassis
+ovn-nbctl --timeout=3 --wait=sb remove Logical_Router_Port alice options redirect-chassis
 
 AT_CHECK([ovn-sbctl find Port_Binding logical_port=cr-alice | wc --lines], [0], [0
 ])
@@ -7761,7 +7761,7 @@ ovn-nbctl lsp-set-options ln-outside network_name=phys
 
 # Allow some time for ovn-northd and ovn-controller to catch up.
 # XXX This should be more systematic.
-ovn-nbctl --wait=hv sync
+ovn-nbctl --wait=hv --timeout=3 sync
 
 echo "---------NB dump-----"
 ovn-nbctl show
@@ -7869,7 +7869,7 @@ ovn-nbctl --id=@gc0 create Gateway_Chassis \
 
 
 # XXX: Let the change propagate down to the ovn-controllers
-ovn-nbctl --wait=hv sync
+ovn-nbctl --wait=hv --timeout=3 sync
 
 # we make sure that the hypervisors noticed, and inverted the slave ports
 AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=32 | grep active_backup | grep slaves:$hv1_gw2_ofport,$hv1_gw1_ofport | wc -l], [0], [1
@@ -8034,18 +8034,22 @@ trim_zeros() {
     sed 's/\(00\)\{1,\}$//'
 }
 
+only_broadcast_from_lrp1() {
+    grep "fffffffffffff00000000001"
+}
+
 garp="fffffffffffff0000000000108060001080006040001f00000000001c0a80064000000000000c0a80064"
-echo $garp >> expout
-echo $garp >> expout
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/snoopvif-tx.pcap | trim_zeros > hv1_snoop_tx
+echo $garp > expout
+
+$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/snoopvif-tx.pcap | trim_zeros | only_broadcast_from_lrp1 | uniq > hv1_snoop_tx
 echo "packets on hv1-snoopvif:"
 cat hv1_snoop_tx
 AT_CHECK([sort hv1_snoop_tx], [0], [expout])
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv2/br-phys_n1-tx.pcap | trim_zeros > hv2_br_phys_tx
+$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv2/br-phys_n1-tx.pcap | trim_zeros | only_broadcast_from_lrp1 | uniq > hv2_br_phys_tx
 echo "packets on hv2 br-phys tx"
 cat hv2_br_phys_tx
 AT_CHECK([grep $garp hv2_br_phys_tx | sort], [0], [expout])
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv3/br-phys_n1-tx.pcap | trim_zeros > hv3_br_phys_tx
+$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv3/br-phys_n1-tx.pcap | trim_zeros | only_broadcast_from_lrp1 | uniq > hv3_br_phys_tx
 echo "packets on hv3 br-phys tx"
 cat hv3_br_phys_tx
 AT_CHECK([grep $garp hv3_br_phys_tx | sort], [0], [])
@@ -8071,11 +8075,11 @@ trim_zeros() {
     sed 's/\(00\)\{1,\}$//'
 }
 
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/snoopvif-tx.pcap | trim_zeros >  hv1_snoopvif_tx
+$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/snoopvif-tx.pcap | trim_zeros | only_broadcast_from_lrp1 | uniq >  hv1_snoopvif_tx
 AT_CHECK([sort hv1_snoopvif_tx], [0], [expout])
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv3/br-phys_n1-tx.pcap | trim_zeros > hv3_br_phys_tx
+$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv3/br-phys_n1-tx.pcap | trim_zeros | only_broadcast_from_lrp1 | uniq > hv3_br_phys_tx
 AT_CHECK([grep $garp hv3_br_phys_tx | sort], [0], [expout])
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv2/br-phys_n1-tx.pcap | trim_zeros > hv2_br_phys_tx
+$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv2/br-phys_n1-tx.pcap | trim_zeros | only_broadcast_from_lrp1 | uniq > hv2_br_phys_tx
 AT_CHECK([grep $garp hv2_br_phys_tx | sort], [0], [])
 OVN_CLEANUP([hv1],[hv2],[hv3])
 
@@ -8144,13 +8148,15 @@ ovn-nbctl lsp-set-type ln-outside localnet
 ovn-nbctl lsp-set-options ln-outside network_name=phys
 
 # Allow some time for ovn-northd and ovn-controller to catch up.
-ovn-nbctl --wait=hv sync
+ovn-nbctl --wait=hv --timeout=3 sync
 
 # currently when ovn-controller is restarted, the old entry is deleted
 # and a new one is created, which leaves the Gateway_Chassis with
 # an empty chassis for a while. NOTE: restarting ovn-controller in tests
 # doesn't have the same effect because "name" is conserved, and the
 # Chassis entry is not replaced.
+
+truncate -s 0 gw1/ovn-controller.log
 
 gw2_chassis=$(ovn-sbctl --bare --columns=_uuid find Chassis name=gw2)
 ovn-sbctl destroy Chassis $gw2_chassis
