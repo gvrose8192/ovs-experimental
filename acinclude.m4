@@ -143,7 +143,7 @@ AC_DEFUN([OVS_CHECK_LINUX], [
     AC_MSG_RESULT([$kversion])
 
     if test "$version" -ge 4; then
-       if test "$version" = 4 && test "$patchlevel" -le 11; then
+       if test "$version" = 4 && test "$patchlevel" -le 12; then
           : # Linux 4.x
        else
           AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 4.11.x is not supported (please refer to the FAQ for advice)])
@@ -538,6 +538,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [OVS_DEFINE([HAVE_PCPU_SW_NETSTATS])])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [netif_needs_gso.*net_device],
                   [OVS_DEFINE([HAVE_NETIF_NEEDS_GSO_NETDEV])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [skb_csum_hwoffload_help])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [udp_offload])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [udp_offload.*uoff],
                   [OVS_DEFINE([HAVE_UDP_OFFLOAD_ARG_UOFF])])
@@ -652,6 +653,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_postpush_rcsum])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [lco_csum])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_nfct])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_put_zero])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/types.h], [bool],
                   [OVS_DEFINE([HAVE_BOOL_TYPE])])
@@ -717,6 +719,9 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/if_vlan.h], [skb_vlan_tagged])
   OVS_GREP_IFELSE([$KSRC/include/linux/if_vlan.h], [eth_type_vlan])
 
+  OVS_FIND_PARAM_IFELSE([$KSRC/include/net/dst_metadata.h],
+                        [metadata_dst_alloc], [metadata_type])
+
   OVS_GREP_IFELSE([$KSRC/include/linux/u64_stats_sync.h], [u64_stats_fetch_begin_irq])
 
   OVS_GREP_IFELSE([$KSRC/include/net/vxlan.h], [struct vxlan_metadata],
@@ -748,6 +753,13 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                         [OVS_DEFINE([HAVE_DEFRAG_ENABLE_TAKES_NET])])
   OVS_GREP_IFELSE([$KSRC/include/net/genetlink.h], [family_list],
                         [OVS_DEFINE([HAVE_GENL_FAMILY_LIST])])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/linux/netdevice.h], [net_device],
+                        [needs_free_netdev],
+                        [OVS_DEFINE([HAVE_NEEDS_FREE_NETDEV])])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/net/vxlan.h], [vxlan_dev], [cfg],
+                        [OVS_DEFINE([HAVE_VXLAN_DEV_CFG])])
+  OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_helper.h],
+                  [nf_conntrack_helper_put])
 
   if cmp -s datapath/linux/kcompat.h.new \
             datapath/linux/kcompat.h >/dev/null 2>&1; then

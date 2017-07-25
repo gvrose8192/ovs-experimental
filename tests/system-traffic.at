@@ -257,7 +257,7 @@ OVS_TRAFFIC_VSWITCHD_STOP
 AT_CLEANUP
 
 AT_SETUP([datapath - ping over vxlan6 tunnel])
-OVS_CHECK_VXLAN()
+OVS_CHECK_VXLAN_UDP6ZEROCSUM()
 
 OVS_TRAFFIC_VSWITCHD_START()
 ADD_BR([br-underlay])
@@ -381,8 +381,7 @@ OVS_TRAFFIC_VSWITCHD_STOP
 AT_CLEANUP
 
 AT_SETUP([datapath - ping over geneve6 tunnel])
-OVS_CHECK_GENEVE()
-AT_SKIP_IF([! ip link add foo type geneve help 2>&1 | grep zerocsum >/dev/null])
+OVS_CHECK_GENEVE_UDP6ZEROCSUM()
 
 OVS_TRAFFIC_VSWITCHD_START()
 ADD_BR([br-underlay])
@@ -789,7 +788,7 @@ ADD_VETH(p1, at_ns1, br0, "10.1.1.2/24")
 AT_DATA([flows.txt], [dnl
 priority=1,action=drop
 priority=10,arp,action=normal
-priority=100,in_port=1,udp,action=ct(commit),controller
+priority=100,in_port=1,udp,action=ct(force,commit),controller
 priority=100,in_port=2,ct_state=-trk,udp,action=ct(table=0)
 priority=100,in_port=2,ct_state=+trk+est,udp,action=ct(force,commit,table=1)
 table=1,in_port=2,ct_state=+trk,udp,action=controller
@@ -824,6 +823,14 @@ dnl Check that the directionality has been changed by force commit.
 dnl
 AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep "orig=.src=10\.1\.1\.2,"], [], [dnl
 udp,orig=(src=10.1.1.2,dst=10.1.1.1,sport=2,dport=1),reply=(src=10.1.1.1,dst=10.1.1.2,sport=1,dport=2)
+])
+
+dnl OK, now send another packet from port 1 and see that it switches again
+AT_CHECK([ovs-ofctl -O OpenFlow13 packet-out br0 "in_port=1 packet=50540000000a50540000000908004500001c000000000011a4cd0a0101010a0101020001000200080000 actions=resubmit(,0)"])
+AT_CHECK([ovs-appctl revalidator/purge], [0])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep "orig=.src=10\.1\.1\.1,"], [], [dnl
+udp,orig=(src=10.1.1.1,dst=10.1.1.2,sport=1,dport=2),reply=(src=10.1.1.2,dst=10.1.1.1,sport=2,dport=1)
 ])
 
 OVS_TRAFFIC_VSWITCHD_STOP
@@ -2678,7 +2685,7 @@ dnl HTTP requests from p0->p1 should work fine.
 OVS_START_L7([at_ns1], [http])
 NS_CHECK_EXEC([at_ns0], [wget 10.1.1.2 -t 5 -T 1 --retry-connrefused -v -o wget0.log])
 
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(10.1.1.2) | sed -e 's/dst=10.1.1.2[[45]][[0-9]]/dst=10.1.1.2XX/'], [0], [dnl
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(10.1.1.2) | sed -e 's/dst=10.1.1.2[[45]][[0-9]]/dst=10.1.1.2XX/' | uniq], [0], [dnl
 tcp,orig=(src=10.1.1.1,dst=10.1.1.2,sport=<cleared>,dport=<cleared>),reply=(src=10.1.1.2,dst=10.1.1.2XX,sport=<cleared>,dport=<cleared>),zone=1,protoinfo=(state=<cleared>)
 ])
 
@@ -2693,12 +2700,16 @@ OVS_TRAFFIC_VSWITCHD_START()
 ADD_NAMESPACES(at_ns0, at_ns1)
 
 ADD_VETH(p0, at_ns0, br0, "10.1.1.1/24")
-NS_CHECK_EXEC([at_ns0], [ip link set dev p0 address 80:88:88:88:88:88])
+NS_CHECK_EXEC([at_ns0], [ip link set dev p0 address e6:66:c1:11:11:11])
+NS_CHECK_EXEC([at_ns0], [arp -s 10.1.1.2 e6:66:c1:22:22:22])
+
 ADD_VETH(p1, at_ns1, br0, "10.1.1.2/24")
+NS_CHECK_EXEC([at_ns1], [ip link set dev p1 address e6:66:c1:22:22:22])
+NS_CHECK_EXEC([at_ns1], [arp -s 10.1.1.240 e6:66:c1:11:11:11])
 
 dnl Allow any traffic from ns0->ns1. Only allow nd, return traffic from ns1->ns0.
 AT_DATA([flows.txt], [dnl
-in_port=1,ip,action=ct(commit,zone=1,nat(src=10.1.1.240-10.1.1.255)),2
+in_port=1,ip,action=ct(commit,zone=1,nat(src=10.1.1.240)),2
 in_port=2,ct_state=-trk,ip,action=ct(table=0,zone=1,nat)
 dnl
 dnl Setting the mark fails if the datapath can't find the existing conntrack
@@ -2707,20 +2718,7 @@ dnl
 in_port=2,ct_state=+trk,ct_zone=1,ip,action=ct(table=1,commit,zone=1,exec(set_field:1->ct_mark)),1
 table=1,in_port=2,ct_mark=1,ct_state=+rpl,ct_zone=1,ip,action=1
 dnl
-dnl ARP
-priority=100 arp arp_op=1 action=move:OXM_OF_ARP_TPA[[]]->NXM_NX_REG2[[]],resubmit(,8),goto_table:10
-priority=10 arp action=normal
 priority=0,action=drop
-dnl
-dnl MAC resolution table for IP in reg2, stores mac in OXM_OF_PKT_REG0
-table=8,reg2=0x0a0101f0/0xfffffff0,action=load:0x808888888888->OXM_OF_PKT_REG0[[]]
-table=8,priority=0,action=load:0->OXM_OF_PKT_REG0[[]]
-dnl ARP responder mac filled in at OXM_OF_PKT_REG0, or 0 for normal action.
-dnl TPA IP in reg2.
-dnl Swaps the fields of the ARP message to turn a query to a response.
-table=10 priority=100 arp xreg0=0 action=normal
-table=10 priority=10,arp,arp_op=1,action=load:2->OXM_OF_ARP_OP[[]],move:OXM_OF_ARP_SHA[[]]->OXM_OF_ARP_THA[[]],move:OXM_OF_PKT_REG0[[0..47]]->OXM_OF_ARP_SHA[[]],move:OXM_OF_ARP_SPA[[]]->OXM_OF_ARP_TPA[[]],move:NXM_NX_REG2[[]]->OXM_OF_ARP_SPA[[]],move:NXM_OF_ETH_SRC[[]]->NXM_OF_ETH_DST[[]],move:OXM_OF_PKT_REG0[[0..47]]->NXM_OF_ETH_SRC[[]],move:NXM_OF_IN_PORT[[]]->NXM_NX_REG3[[0..15]],load:0->NXM_OF_IN_PORT[[]],output:NXM_NX_REG3[[0..15]]
-table=10 priority=0 action=drop
 ])
 
 AT_CHECK([ovs-ofctl --bundle add-flows br0 flows.txt])
@@ -2777,7 +2775,7 @@ dnl HTTP requests from p0->p1 should work fine.
 OVS_START_L7([at_ns1], [http])
 NS_CHECK_EXEC([at_ns0], [wget 10.1.1.2 -t 5 -T 1 --retry-connrefused -v -o wget0.log])
 
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(10.1.1.2) | sed -e 's/dst=10.1.1.2[[45]][[0-9]]/dst=10.1.1.2XX/'], [0], [dnl
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(10.1.1.2) | sed -e 's/dst=10.1.1.2[[45]][[0-9]]/dst=10.1.1.2XX/' | uniq], [0], [dnl
 tcp,orig=(src=10.1.1.1,dst=10.1.1.2,sport=<cleared>,dport=<cleared>),reply=(src=10.1.1.2,dst=10.1.1.2XX,sport=<cleared>,dport=<cleared>),zone=1,protoinfo=(state=<cleared>)
 ])
 
@@ -2830,7 +2828,7 @@ dnl HTTP requests from p0->p1 should work fine.
 OVS_START_L7([at_ns1], [http])
 NS_CHECK_EXEC([at_ns0], [wget 10.1.1.2 -t 5 -T 1 --retry-connrefused -v -o wget0.log])
 
-AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(10.1.1.2) | sed -e 's/dst=10.1.1.2[[45]][[0-9]]/dst=10.1.1.2XX/'], [0], [dnl
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(10.1.1.2) | sed -e 's/dst=10.1.1.2[[45]][[0-9]]/dst=10.1.1.2XX/' | uniq], [0], [dnl
 tcp,orig=(src=10.1.1.1,dst=10.1.1.2,sport=<cleared>,dport=<cleared>),reply=(src=10.1.1.2,dst=10.1.1.2XX,sport=<cleared>,dport=<cleared>),zone=1,protoinfo=(state=<cleared>)
 ])
 

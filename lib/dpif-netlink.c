@@ -3434,8 +3434,9 @@ dpif_netlink_flow_from_ofpbuf(struct dpif_netlink_flow *flow,
 
 
 /*
- * If PACKET_TYPE attribute is present in 'data', it filters PACKET_TYPE out,
- * then puts 'data' to 'buf'.
+ * If PACKET_TYPE attribute is present in 'data', it filters PACKET_TYPE out.
+ * If the flow is not Ethernet, the OVS_KEY_ATTR_PACKET_TYPE is converted to
+ * OVS_KEY_ATTR_ETHERTYPE. Puts 'data' to 'buf'.
  */
 static void
 put_exclude_packet_type(struct ofpbuf *buf, uint16_t type,
@@ -3452,13 +3453,27 @@ put_exclude_packet_type(struct ofpbuf *buf, uint16_t type,
         size_t first_chunk_size = (uint8_t *)packet_type - (uint8_t *)data;
         size_t second_chunk_size = data_len - first_chunk_size
                                    - packet_type_len;
-        uint8_t *first_attr = NULL;
         struct nlattr *next_attr = nl_attr_next(packet_type);
+        size_t ofs;
 
-        first_attr = nl_msg_put_unspec_uninit(buf, type,
-                                              data_len - packet_type_len);
-        memcpy(first_attr, data, first_chunk_size);
-        memcpy(first_attr + first_chunk_size, next_attr, second_chunk_size);
+        ofs = nl_msg_start_nested(buf, type);
+        nl_msg_put(buf, data, first_chunk_size);
+        nl_msg_put(buf, next_attr, second_chunk_size);
+        if (!nl_attr_find__(data, data_len, OVS_KEY_ATTR_ETHERNET)) {
+            ovs_be16 pt = pt_ns_type_be(nl_attr_get_be32(packet_type));
+            const struct nlattr *nla;
+
+            nla = nl_attr_find(buf, NLA_HDRLEN, OVS_KEY_ATTR_ETHERTYPE);
+            if (nla) {
+                ovs_be16 *ethertype;
+
+                ethertype = CONST_CAST(ovs_be16 *, nl_attr_get(nla));
+                *ethertype = pt;
+            } else {
+                nl_msg_put_be16(buf, OVS_KEY_ATTR_ETHERTYPE, pt);
+            }
+        }
+        nl_msg_end_nested(buf, ofs);
     } else {
         nl_msg_put_unspec(buf, type, data, data_len);
     }
