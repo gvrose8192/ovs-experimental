@@ -63,6 +63,13 @@ def print_warning(message):
     __warnings = __warnings + 1
 
 
+def reset_counters():
+    global __errors, __warnings
+
+    __errors = 0
+    __warnings = 0
+
+
 # These are keywords whose names are normally followed by a space and
 # something in parentheses (usually an expression) then a left curly brace.
 #
@@ -320,6 +327,10 @@ def ovs_checkpatch_parse(text, filename):
                               re.I | re.M | re.S)
     is_co_author = re.compile(r'(\s*(Co-authored-by: )(.*))$',
                               re.I | re.M | re.S)
+    is_gerrit_change_id = re.compile(r'(\s*(change-id: )(.*))$',
+                                     re.I | re.M | re.S)
+
+    reset_counters()
 
     for line in text.split('\n'):
         if current_file != previous_file:
@@ -357,6 +368,10 @@ def ovs_checkpatch_parse(text, filename):
             elif is_co_author.match(line):
                 m = is_co_author.match(line)
                 co_authors.append(m.group(3))
+            elif is_gerrit_change_id.match(line):
+                print_error(
+                    "Remove Gerrit Change-Id's before submitting upstream.")
+                print("%d: %s\n" % (lineno, line))
         elif parse == 2:
             newfile = hunks.match(line)
             if newfile:
@@ -393,7 +408,7 @@ def usage():
 Open vSwitch checkpatch.py
 Checks a patch for trivial mistakes.
 usage:
-%s [options] [PATCH | -f SOURCE | -1 | -2 | ...]
+%s [options] [PATCH1 [PATCH2 ...] | -f SOURCE1 [SOURCE2 ...] | -1 | -2 | ...]
 
 Input options:
 -f|--check-file                Arguments are source files, not patches.
@@ -408,8 +423,16 @@ Check options:
           % sys.argv[0])
 
 
+def ovs_checkpatch_print_result(result):
+    global __warnings, __errors, total_line
+    if result < 0:
+        print("Lines checked: %d, Warnings: %d, Errors: %d\n" %
+              (total_line, __warnings, __errors))
+    else:
+        print("Lines checked: %d, no obvious problems found\n" % (total_line))
+
+
 def ovs_checkpatch_file(filename):
-    global __warnings, __errors, checking_file, total_line
     try:
         mail = email.message_from_file(open(filename, 'r'))
     except:
@@ -420,11 +443,7 @@ def ovs_checkpatch_file(filename):
         if part.get_content_maintype() == 'multipart':
             continue
     result = ovs_checkpatch_parse(part.get_payload(decode=False), filename)
-    if result < 0:
-        print("Lines checked: %d, Warnings: %d, Errors: %d" %
-              (total_line, __warnings, __errors))
-    else:
-        print("Lines checked: %d, no obvious problems found" % (total_line))
+    ovs_checkpatch_print_result(result)
     return result
 
 
@@ -481,22 +500,36 @@ if __name__ == '__main__':
 
     if n_patches:
         status = 0
+
+        git_log = 'git log --no-color --no-merges --pretty=format:"%H %s" '
+        with os.popen(git_log + '-%d' % n_patches, 'r') as f:
+            commits = f.read().split("\n")
+
         for i in reversed(range(0, n_patches)):
-            revision = 'HEAD~%d' % i
+            revision, name = commits[i].split(" ", 1)
             f = os.popen('git format-patch -1 --stdout %s' % revision, 'r')
             patch = f.read()
             f.close()
 
-            print('== Checking %s ==' % revision)
-            if ovs_checkpatch_parse(patch, revision):
+            print('== Checking %s ("%s") ==' % (revision[0:12], name))
+            result = ovs_checkpatch_parse(patch, revision)
+            ovs_checkpatch_print_result(result)
+            if result:
                 status = -1
         sys.exit(status)
 
-    try:
-        filename = args[0]
-    except:
+    if not args:
         if sys.stdin.isatty():
             usage()
             sys.exit(-1)
-        sys.exit(ovs_checkpatch_parse(sys.stdin.read(), '-'))
-    sys.exit(ovs_checkpatch_file(filename))
+        result = ovs_checkpatch_parse(sys.stdin.read(), '-')
+        ovs_checkpatch_print_result(result)
+        sys.exit(result)
+
+    status = 0
+    for filename in args:
+        print('== Checking "%s" ==' % filename)
+        result = ovs_checkpatch_file(filename)
+        if result:
+            status = -1
+    sys.exit(status)
