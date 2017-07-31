@@ -24,6 +24,7 @@
 #include "dirs.h"
 #include "fatal-signal.h"
 #include "openvswitch/json.h"
+#include "ovn/lib/acl-log.h"
 #include "ovn/lib/ovn-nb-idl.h"
 #include "ovn/lib/ovn-util.h"
 #include "packets.h"
@@ -332,7 +333,8 @@ Logical switch commands:\n\
   ls-list                   print the names of all logical switches\n\
 \n\
 ACL commands:\n\
-  acl-add SWITCH DIRECTION PRIORITY MATCH ACTION [log]\n\
+  [--log] [--severity=SEVERITY] [--name=NAME] [--may-exist]\n\
+  acl-add SWITCH DIRECTION PRIORITY MATCH ACTION\n\
                             add an ACL to SWITCH\n\
   acl-del SWITCH [DIRECTION [PRIORITY MATCH]]\n\
                             remove ACLs from SWITCH\n\
@@ -367,6 +369,9 @@ Logical switch port commands:\n\
   lsp-set-dhcpv4-options PORT [DHCP_OPTIONS_UUID]\n\
                             set dhcpv4 options for PORT\n\
   lsp-get-dhcpv4-options PORT  get the dhcpv4 options for PORT\n\
+  lsp-set-dhcpv6-options PORT [DHCP_OPTIONS_UUID]\n\
+                            set dhcpv6 options for PORT\n\
+  lsp-get-dhcpv6-options PORT  get the dhcpv6 options for PORT\n\
 \n\
 Logical router commands:\n\
   lr-add [ROUTER]           create a logical router named ROUTER\n\
@@ -1243,6 +1248,30 @@ nbctl_lsp_set_dhcpv4_options(struct ctl_context *ctx)
 }
 
 static void
+nbctl_lsp_set_dhcpv6_options(struct ctl_context *ctx)
+{
+    const char *id = ctx->argv[1];
+    const struct nbrec_logical_switch_port *lsp;
+
+    lsp = lsp_by_name_or_uuid(ctx, id, true);
+    const struct nbrec_dhcp_options *dhcp_opt = NULL;
+    if (ctx->argc == 3) {
+        dhcp_opt = dhcp_options_get(ctx, ctx->argv[2], true);
+    }
+
+    if (dhcp_opt) {
+        struct in6_addr ip;
+        unsigned int plen;
+        char *error = ipv6_parse_cidr(dhcp_opt->cidr, &ip, &plen);
+        if (error) {
+            free(error);
+            ctl_fatal("DHCP options cidr '%s' is not IPv6", dhcp_opt->cidr);
+        }
+    }
+    nbrec_logical_switch_port_set_dhcpv6_options(lsp, dhcp_opt);
+}
+
+static void
 nbctl_lsp_get_dhcpv4_options(struct ctl_context *ctx)
 {
     const char *id = ctx->argv[1];
@@ -1253,6 +1282,20 @@ nbctl_lsp_get_dhcpv4_options(struct ctl_context *ctx)
         ds_put_format(&ctx->output, UUID_FMT " (%s)\n",
                       UUID_ARGS(&lsp->dhcpv4_options->header_.uuid),
                       lsp->dhcpv4_options->cidr);
+    }
+}
+
+static void
+nbctl_lsp_get_dhcpv6_options(struct ctl_context *ctx)
+{
+    const char *id = ctx->argv[1];
+    const struct nbrec_logical_switch_port *lsp;
+
+    lsp = lsp_by_name_or_uuid(ctx, id, true);
+    if (lsp->dhcpv6_options) {
+        ds_put_format(&ctx->output, UUID_FMT " (%s)\n",
+                      UUID_ARGS(&lsp->dhcpv6_options->header_.uuid),
+                      lsp->dhcpv6_options->cidr);
     }
 }
 
@@ -1311,9 +1354,21 @@ nbctl_acl_list(struct ctl_context *ctx)
 
     for (i = 0; i < ls->n_acls; i++) {
         const struct nbrec_acl *acl = acls[i];
-        ds_put_format(&ctx->output, "%10s %5"PRId64" (%s) %s%s\n",
-                      acl->direction, acl->priority,
-                      acl->match, acl->action, acl->log ? " log" : "");
+        ds_put_format(&ctx->output, "%10s %5"PRId64" (%s) %s",
+                      acl->direction, acl->priority, acl->match,
+                      acl->action);
+        if (acl->log) {
+            ds_put_cstr(&ctx->output, " log(");
+            if (acl->name) {
+                ds_put_format(&ctx->output, "name=%s,", acl->name);
+            }
+            if (acl->severity) {
+                ds_put_format(&ctx->output, "severity=%s", acl->severity);
+            }
+            ds_chomp(&ctx->output, ',');
+            ds_put_cstr(&ctx->output, ")");
+        }
+        ds_put_cstr(&ctx->output, "\n");
     }
 
     free(acls);
@@ -1369,8 +1424,22 @@ nbctl_acl_add(struct ctl_context *ctx)
     nbrec_acl_set_direction(acl, direction);
     nbrec_acl_set_match(acl, ctx->argv[4]);
     nbrec_acl_set_action(acl, action);
-    if (shash_find(&ctx->options, "--log") != NULL) {
+
+    /* Logging options. */
+    bool log = shash_find(&ctx->options, "--log") != NULL;
+    const char *severity = shash_find_data(&ctx->options, "--severity");
+    const char *name = shash_find_data(&ctx->options, "--name");
+    if (log || severity || name) {
         nbrec_acl_set_log(acl, true);
+    }
+    if (severity) {
+        if (log_severity_from_string(severity) == UINT8_MAX) {
+            ctl_fatal("bad severity: %s", severity);
+        }
+        nbrec_acl_set_severity(acl, severity);
+    }
+    if (name) {
+        nbrec_acl_set_name(acl, name);
     }
 
     /* Check if same acl already exists for the ls */
@@ -3292,6 +3361,8 @@ static const struct ctl_table_class tables[NBREC_N_TABLES] = {
 
     [NBREC_TABLE_ADDRESS_SET].row_ids[0]
     = {&nbrec_address_set_col_name, NULL, NULL},
+
+    [NBREC_TABLE_ACL].row_ids[0] = {&nbrec_acl_col_name, NULL, NULL},
 };
 
 static void
@@ -3543,8 +3614,8 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "ls-list", 0, 0, "", NULL, nbctl_ls_list, NULL, "", RO },
 
     /* acl commands. */
-    { "acl-add", 5, 5, "SWITCH DIRECTION PRIORITY MATCH ACTION", NULL,
-      nbctl_acl_add, NULL, "--log,--may-exist", RW },
+    { "acl-add", 5, 6, "SWITCH DIRECTION PRIORITY MATCH ACTION", NULL,
+      nbctl_acl_add, NULL, "--log,--may-exist,--name=,--severity=", RW },
     { "acl-del", 1, 4, "SWITCH [DIRECTION [PRIORITY MATCH]]", NULL,
       nbctl_acl_del, NULL, "", RW },
     { "acl-list", 1, 1, "SWITCH", NULL, nbctl_acl_list, NULL, "", RO },
@@ -3581,6 +3652,10 @@ static const struct ctl_command_syntax nbctl_commands[] = {
       nbctl_lsp_set_dhcpv4_options, NULL, "", RW },
     { "lsp-get-dhcpv4-options", 1, 1, "PORT", NULL,
       nbctl_lsp_get_dhcpv4_options, NULL, "", RO },
+    { "lsp-set-dhcpv6-options", 1, 2, "PORT [DHCP_OPT_UUID]", NULL,
+      nbctl_lsp_set_dhcpv6_options, NULL, "", RW },
+    { "lsp-get-dhcpv6-options", 1, 1, "PORT", NULL,
+      nbctl_lsp_get_dhcpv6_options, NULL, "", RO },
 
     /* logical router commands. */
     { "lr-add", 0, 1, "[ROUTER]", NULL, nbctl_lr_add, NULL,
