@@ -26,6 +26,10 @@
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct vl_mff_map;
 
 /* List of OVS abstracted actions.
@@ -195,7 +199,8 @@ BUILD_ASSERT_DECL(sizeof(struct ofpact) == 4);
 static inline struct ofpact *
 ofpact_next(const struct ofpact *ofpact)
 {
-    return (void *) ((uint8_t *) ofpact + OFPACT_ALIGN(ofpact->len));
+    return ALIGNED_CAST(struct ofpact *,
+                        (uint8_t *) ofpact + OFPACT_ALIGN(ofpact->len));
 }
 
 struct ofpact *ofpact_next_flattened(const struct ofpact *);
@@ -203,7 +208,7 @@ struct ofpact *ofpact_next_flattened(const struct ofpact *);
 static inline struct ofpact *
 ofpact_end(const struct ofpact *ofpacts, size_t ofpacts_len)
 {
-    return (void *) ((uint8_t *) ofpacts + ofpacts_len);
+    return ALIGNED_CAST(struct ofpact *, (uint8_t *) ofpacts + ofpacts_len);
 }
 
 static inline const struct ofpact *
@@ -1103,8 +1108,8 @@ void *ofpact_finish(struct ofpbuf *, struct ofpact *);
     static inline struct STRUCT *                                       \
     ofpact_put_##ENUM(struct ofpbuf *ofpacts)                           \
     {                                                                   \
-        return ofpact_put(ofpacts, OFPACT_##ENUM,                       \
-                          OFPACT_##ENUM##_SIZE);                        \
+        return (struct STRUCT *) ofpact_put(ofpacts, OFPACT_##ENUM,     \
+                                            OFPACT_##ENUM##_SIZE);      \
     }                                                                   \
                                                                         \
     static inline void                                                  \
@@ -1119,7 +1124,7 @@ void *ofpact_finish(struct ofpbuf *, struct ofpact *);
     {                                                                   \
         struct ofpact *ofpact = &(*ofpactp)->ofpact;                    \
         ovs_assert(ofpact->type == OFPACT_##ENUM);                      \
-        *ofpactp = ofpact_finish(ofpbuf, ofpact);                       \
+        *ofpactp = (struct STRUCT *) ofpact_finish(ofpbuf, ofpact);     \
     }
 OFPACTS
 #undef OFPACT
@@ -1189,5 +1194,9 @@ enum ofperr ovs_instruction_type_from_inst_type(
 ovs_be32 ovsinst_bitmap_to_openflow(uint32_t ovsinst_bitmap, enum ofp_version);
 uint32_t ovsinst_bitmap_from_openflow(ovs_be32 ofpit_bitmap,
                                       enum ofp_version);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* ofp-actions.h */
