@@ -70,7 +70,8 @@ static const struct nl_policy vxlan_policy[] = {
     [IFLA_VXLAN_LEARNING] = { .type = NL_A_U8 },
     [IFLA_VXLAN_UDP_ZERO_CSUM6_RX] = { .type = NL_A_U8 },
     [IFLA_VXLAN_PORT] = { .type = NL_A_U16 },
-    [IFLA_VXLAN_GPE] = { .type = NL_A_FLAG },
+    [IFLA_VXLAN_GBP] = { .type = NL_A_FLAG, .optional = true },
+    [IFLA_VXLAN_GPE] = { .type = NL_A_FLAG, .optional = true },
 };
 static const struct nl_policy gre_policy[] = {
     [IFLA_GRE_COLLECT_METADATA] = { .type = NL_A_FLAG },
@@ -349,7 +350,7 @@ dpif_netlink_rtnl_port_create(struct netdev *netdev)
     type = netdev_to_ovs_vport_type(netdev_get_type(netdev));
     tnl_cfg = netdev_get_tunnel_config(netdev);
     if (!tnl_cfg) {
-        return EINVAL;
+        return EOPNOTSUPP;
     }
 
     kind = vport_type_to_kind(type, tnl_cfg);
