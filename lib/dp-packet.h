@@ -533,10 +533,16 @@ dp_packet_set_cutlen(struct dp_packet *b, uint32_t max_len)
 }
 
 static inline uint32_t
-dp_packet_get_cutlen(struct dp_packet *b)
+dp_packet_get_cutlen(const struct dp_packet *b)
 {
     /* Always in valid range if user uses dp_packet_set_cutlen. */
     return b->cutlen;
+}
+
+static inline uint32_t
+dp_packet_get_send_len(const struct dp_packet *b)
+{
+    return dp_packet_size(b) - dp_packet_get_cutlen(b);
 }
 
 static inline void *
@@ -612,7 +618,19 @@ static inline bool
 dp_packet_ip_checksum_valid(struct dp_packet *p)
 {
 #ifdef DPDK_NETDEV
-    return p->mbuf.ol_flags & PKT_RX_IP_CKSUM_GOOD;
+    return (p->mbuf.ol_flags & PKT_RX_IP_CKSUM_MASK) ==
+            PKT_RX_IP_CKSUM_GOOD;
+#else
+    return 0 && p;
+#endif
+}
+
+static inline bool
+dp_packet_ip_checksum_bad(struct dp_packet *p)
+{
+#ifdef DPDK_NETDEV
+    return (p->mbuf.ol_flags & PKT_RX_IP_CKSUM_MASK) ==
+            PKT_RX_IP_CKSUM_BAD;
 #else
     return 0 && p;
 #endif
@@ -622,7 +640,19 @@ static inline bool
 dp_packet_l4_checksum_valid(struct dp_packet *p)
 {
 #ifdef DPDK_NETDEV
-    return p->mbuf.ol_flags & PKT_RX_L4_CKSUM_GOOD;
+    return (p->mbuf.ol_flags & PKT_RX_L4_CKSUM_MASK) ==
+            PKT_RX_L4_CKSUM_GOOD;
+#else
+    return 0 && p;
+#endif
+}
+
+static inline bool
+dp_packet_l4_checksum_bad(struct dp_packet *p)
+{
+#ifdef DPDK_NETDEV
+    return (p->mbuf.ol_flags & PKT_RX_L4_CKSUM_MASK) ==
+            PKT_RX_L4_CKSUM_BAD;
 #else
     return 0 && p;
 #endif
@@ -759,9 +789,7 @@ dp_packet_batch_apply_cutlen(struct dp_packet_batch *batch)
         struct dp_packet *packet;
 
         DP_PACKET_BATCH_FOR_EACH (packet, batch) {
-            uint32_t cutlen = dp_packet_get_cutlen(packet);
-
-            dp_packet_set_size(packet, dp_packet_size(packet) - cutlen);
+            dp_packet_set_size(packet, dp_packet_get_send_len(packet));
             dp_packet_reset_cutlen(packet);
         }
         batch->trunc = false;

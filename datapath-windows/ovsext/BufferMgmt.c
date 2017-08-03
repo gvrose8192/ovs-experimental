@@ -802,6 +802,7 @@ OvsPartialCopyNBL(PVOID ovsContext,
              OVS_BUFFER_PRIVATE_FORWARD_CONTEXT;
 
     srcNb = NET_BUFFER_LIST_FIRST_NB(nbl);
+    ASSERT(srcNb);
     OvsInitNBLContext(dstCtx, flags, NET_BUFFER_DATA_LENGTH(srcNb) - copySize,
                       OVS_DPPORT_NUMBER_INVALID);
 
@@ -984,6 +985,9 @@ OvsFullCopyNBL(PVOID ovsContext,
     }
 
     nb = NET_BUFFER_LIST_FIRST_NB(nbl);
+    if (nb == NULL) {
+        return NULL;
+    }
 
     if (NET_BUFFER_NEXT_NB(nb) == NULL) {
         return OvsCopySinglePacketNBL(context, nbl, nb, headRoom, copyNblInfo);
@@ -1674,9 +1678,11 @@ OvsCompleteNBL(POVS_SWITCH_CONTEXT context,
         PNET_BUFFER nbTemp = NET_BUFFER_LIST_FIRST_NB(nbl);
         while (nbTemp) {
             PMDL mdl = NET_BUFFER_FIRST_MDL(nbTemp);
+            if (mdl) {
+                ASSERT(mdl->Next == NULL);
+                OvsFreeMDLAndData(mdl);
+            }
             NET_BUFFER_FIRST_MDL(nbTemp) = NULL;
-            ASSERT(mdl->Next == NULL);
-            OvsFreeMDLAndData(mdl);
             nbTemp = NET_BUFFER_NEXT_NB(nbTemp);
         }
     }

@@ -234,6 +234,8 @@ struct xlate_ctx {
     bool in_action_set;         /* Currently translating action_set, if true. */
     bool in_packet_out;         /* Currently translating a packet_out msg, if
                                  * true. */
+    bool pending_encap;         /* Waiting to commit a pending encap
+                                 * action, if true. */
 
     uint8_t table_id;           /* OpenFlow table ID where flow was found. */
     ovs_be64 rule_cookie;       /* Cookie of the rule being translated. */
@@ -1899,14 +1901,14 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
             }
         } else if (xvlan.v[0].vid != out_vlan
                    && !eth_addr_is_reserved(ctx->xin->flow.dl_dst)) {
-            struct xbundle *xbundle;
+            struct xbundle *xb;
             uint16_t old_vid = xvlan.v[0].vid;
 
             xvlan.v[0].vid = out_vlan;
-            LIST_FOR_EACH (xbundle, list_node, &xbridge->xbundles) {
-                if (xbundle_includes_vlan(xbundle, &xvlan)
-                    && !xbundle_mirror_out(xbridge, xbundle)) {
-                    output_normal(ctx, xbundle, &xvlan);
+            LIST_FOR_EACH (xb, list_node, &xbridge->xbundles) {
+                if (xbundle_includes_vlan(xb, &xvlan)
+                    && !xbundle_mirror_out(xbridge, xb)) {
+                    output_normal(ctx, xb, &xvlan);
                 }
             }
             xvlan.v[0].vid = old_vid;
@@ -2724,6 +2726,13 @@ xlate_normal(struct xlate_ctx *ctx)
         struct mcast_group *grp = NULL;
 
         if (is_igmp(flow, wc)) {
+            /*
+             * IGMP packets need to take the slow path, in order to be
+             * processed for mdb updates. That will prevent expires
+             * firing off even after hosts have sent reports.
+             */
+            ctx->xout->slow |= SLOW_ACTION;
+
             memset(&wc->masks.tp_src, 0xff, sizeof wc->masks.tp_src);
             if (mcast_snooping_is_membership(flow->tp_src) ||
                 mcast_snooping_is_query(flow->tp_src)) {
@@ -2731,12 +2740,6 @@ xlate_normal(struct xlate_ctx *ctx)
                     update_mcast_snooping_table(ctx, flow, vlan,
                                                 in_xbundle, ctx->xin->packet);
                 }
-                /*
-                 * IGMP packets need to take the slow path, in order to be
-                 * processed for mdb updates. That will prevent expires
-                 * firing off even after hosts have sent reports.
-                 */
-                ctx->xout->slow |= SLOW_ACTION;
             }
 
             if (mcast_snooping_is_membership(flow->tp_src)) {
@@ -3465,7 +3468,8 @@ xlate_commit_actions(struct xlate_ctx *ctx)
 
     ctx->xout->slow |= commit_odp_actions(&ctx->xin->flow, &ctx->base_flow,
                                           ctx->odp_actions, ctx->wc,
-                                          use_masked);
+                                          use_masked, ctx->pending_encap);
+    ctx->pending_encap = false;
 }
 
 static void
@@ -5503,6 +5507,8 @@ freeze_unroll_actions(const struct ofpact *a, const struct ofpact *end,
         case OFPACT_METER:
         case OFPACT_SAMPLE:
         case OFPACT_CLONE:
+        case OFPACT_ENCAP:
+        case OFPACT_DECAP:
         case OFPACT_DEBUG_RECIRC:
         case OFPACT_CT:
         case OFPACT_CT_CLEAR:
@@ -5692,6 +5698,93 @@ compose_conntrack_action(struct xlate_ctx *ctx, struct ofpact_conntrack *ofc)
 }
 
 static void
+rewrite_flow_encap_ethernet(struct xlate_ctx *ctx,
+                            struct flow *flow,
+                            struct flow_wildcards *wc)
+{
+    wc->masks.packet_type = OVS_BE32_MAX;
+    if (pt_ns(flow->packet_type) == OFPHTN_ETHERTYPE) {
+        /* Only adjust the packet_type and zero the dummy Ethernet addresses. */
+        ovs_be16 ethertype = pt_ns_type_be(flow->packet_type);
+        flow->packet_type = htonl(PT_ETH);
+        flow->dl_src = eth_addr_zero;
+        flow->dl_dst = eth_addr_zero;
+        flow->dl_type = ethertype;
+    } else {
+        xlate_report_debug(ctx, OFT_ACTION,
+                           "encap(ethernet) unsupported for packet type "
+                           "ethernet");
+        /* TODO: Error handling: drop packet. */
+        ctx->error = 1;
+    }
+}
+
+static void
+xlate_generic_encap_action(struct xlate_ctx *ctx,
+                           const struct ofpact_encap *encap)
+{
+    struct flow *flow = &ctx->xin->flow;
+    struct flow_wildcards *wc = ctx->wc;
+
+    /* Ensure that any pending actions on the inner packet are applied before
+     * rewriting the flow */
+    xlate_commit_actions(ctx);
+
+    /* Rewrite the flow to reflect the effect of pushing the new encap header. */
+    switch (ntohl(encap->new_pkt_type)) {
+        case PT_ETH:
+            rewrite_flow_encap_ethernet(ctx, flow, wc);
+            break;
+        default:
+            /* TODO: Error handling: Should not happen if the PT is checked
+             * at decoding */
+            break;
+    }
+
+    if (!ctx->error) {
+        /* The actual encap datapath action will be generated at next commit. */
+        ctx->pending_encap = true;
+    }
+}
+
+/* Returns true if packet must be recirculated after decapsulation. */
+static bool
+xlate_generic_decap_action(struct xlate_ctx *ctx,
+                           const struct ofpact_decap *decap OVS_UNUSED)
+{
+    struct flow *flow = &ctx->xin->flow;
+
+    /* Ensure that any pending actions on the current packet are applied
+     * before generating the decap action. */
+    xlate_commit_actions(ctx);
+
+    /* We assume for now that the new_pkt_type is PT_USE_NEXT_PROTO. */
+    switch (ntohl(flow->packet_type)) {
+        case PT_ETH:
+            if (flow->vlans[0].tci & htons(VLAN_CFI)) {
+                /* Error handling: drop packet. */
+                xlate_report_debug(ctx, OFT_ACTION, "Dropping packet, cannot "
+                                   "decap Ethernet if VLAN is present.");
+                ctx->error = 1;
+            } else {
+                /* Just change the packet_type.
+                 * Delay generating pop_eth to the next commit. */
+                flow->packet_type = htonl(PACKET_TYPE(OFPHTN_ETHERTYPE,
+                                                      ntohs(flow->dl_type)));
+                ctx->wc->masks.dl_type = OVS_BE16_MAX;
+            }
+            return false;
+        default:
+            xlate_report_debug(ctx, OFT_ACTION,
+                               "decap() for unsupported packet type %x",
+                               ntohl(flow->packet_type));
+            /* TODO: Error handling: drop packet. */
+            ctx->error = 1;
+            return false;
+    }
+}
+
+static void
 recirc_for_mpls(const struct ofpact *a, struct xlate_ctx *ctx)
 {
     /* No need to recirculate if already exiting. */
@@ -5765,6 +5858,8 @@ recirc_for_mpls(const struct ofpact *a, struct xlate_ctx *ctx)
     case OFPACT_EXIT:
     case OFPACT_SAMPLE:
     case OFPACT_CLONE:
+    case OFPACT_ENCAP:
+    case OFPACT_DECAP:
     case OFPACT_UNROLL_XLATE:
     case OFPACT_CT:
     case OFPACT_CT_CLEAR:
@@ -6181,6 +6276,22 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             xlate_clone(ctx, ofpact_get_CLONE(a));
             break;
 
+        case OFPACT_ENCAP:
+            xlate_generic_encap_action(ctx, ofpact_get_ENCAP(a));
+            break;
+
+        case OFPACT_DECAP: {
+            bool recirc_needed =
+                    xlate_generic_decap_action(ctx, ofpact_get_DECAP(a));
+            if (!ctx->error && recirc_needed) {
+                /* Recirculate for parsing of inner packet. */
+                ctx_trigger_freeze(ctx);
+                /* Then continue with next action. */
+                a = ofpact_next(a);
+            }
+            break;
+        }
+
         case OFPACT_CT:
             compose_conntrack_action(ctx, ofpact_get_CT(a));
             break;
@@ -6423,7 +6534,7 @@ xlate_wc_finish(struct xlate_ctx *ctx)
      * use non-header fields as part of the cache. */
     flow_wildcards_clear_non_packet_fields(ctx->wc);
 
-    /* Wildcard ethernet addresses if the original packet type was not
+    /* Wildcard ethernet fields if the original packet type was not
      * Ethernet. */
     if (ctx->xin->upcall_flow->packet_type != htonl(PT_ETH)) {
         ctx->wc->masks.dl_dst = eth_addr_zero;
@@ -6512,6 +6623,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         .in_group = false,
         .in_action_set = false,
         .in_packet_out = xin->in_packet_out,
+        .pending_encap = false,
 
         .table_id = 0,
         .rule_cookie = OVS_BE64_MAX,
@@ -6568,7 +6680,6 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 
         /* Set the bridge for post-recirculation processing if needed. */
         if (!uuid_equals(&ctx.xbridge->ofproto->uuid, &state->ofproto_uuid)) {
-            struct xlate_cfg *xcfg = ovsrcu_get(struct xlate_cfg *, &xcfgp);
             const struct xbridge *new_bridge
                 = xbridge_lookup_by_uuid(xcfg, &state->ofproto_uuid);
 
@@ -6672,6 +6783,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         flow->packet_type = htonl(PT_ETH);
         flow->dl_src = eth_addr_zero;
         flow->dl_dst = eth_addr_zero;
+        ctx.pending_encap = true;
     }
 
     if (!xin->ofpacts && !ctx.rule) {
@@ -6957,8 +7069,9 @@ xlate_send_packet(const struct ofport_dpif *ofport, bool oam,
     }
 
     if (oam) {
-        const ovs_be16 oam = htons(NX_TUN_FLAG_OAM);
-        ofpact_put_set_field(&ofpacts, mf_from_id(MFF_TUN_FLAGS), &oam, &oam);
+        const ovs_be16 flag = htons(NX_TUN_FLAG_OAM);
+        ofpact_put_set_field(&ofpacts, mf_from_id(MFF_TUN_FLAGS),
+                             &flag, &flag);
     }
 
     ofpact_put_OUTPUT(&ofpacts)->port = xport->ofp_port;
