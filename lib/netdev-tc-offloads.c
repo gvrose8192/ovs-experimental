@@ -307,20 +307,27 @@ parse_tc_flower_to_match(struct tc_flower *flower,
         match_set_dl_type(match, key->eth_type);
     }
 
-    if (key->ip_proto && is_ip_any(&match->flow)) {
-        match_set_nw_proto(match, key->ip_proto);
+    if (is_ip_any(&match->flow)) {
+        if (key->ip_proto) {
+            match_set_nw_proto(match, key->ip_proto);
+        }
+
+        match_set_nw_src_masked(match, key->ipv4.ipv4_src, mask->ipv4.ipv4_src);
+        match_set_nw_dst_masked(match, key->ipv4.ipv4_dst, mask->ipv4.ipv4_dst);
+
+        match_set_ipv6_src_masked(match,
+                                  &key->ipv6.ipv6_src, &mask->ipv6.ipv6_src);
+        match_set_ipv6_dst_masked(match,
+                                  &key->ipv6.ipv6_dst, &mask->ipv6.ipv6_dst);
+
+        if (key->ip_proto == IPPROTO_TCP) {
+            match_set_tp_dst_masked(match, key->tcp_dst, mask->tcp_dst);
+            match_set_tp_src_masked(match, key->tcp_src, mask->tcp_src);
+        } else if (key->ip_proto == IPPROTO_UDP) {
+            match_set_tp_dst_masked(match, key->udp_dst, mask->udp_dst);
+            match_set_tp_src_masked(match, key->udp_src, mask->udp_src);
+        }
     }
-
-    match_set_nw_src_masked(match, key->ipv4.ipv4_src, mask->ipv4.ipv4_src);
-    match_set_nw_dst_masked(match, key->ipv4.ipv4_dst, mask->ipv4.ipv4_dst);
-
-    match_set_ipv6_src_masked(match,
-                              &key->ipv6.ipv6_src, &mask->ipv6.ipv6_src);
-    match_set_ipv6_dst_masked(match,
-                              &key->ipv6.ipv6_dst, &mask->ipv6.ipv6_dst);
-
-    match_set_tp_dst_masked(match, key->dst_port, mask->dst_port);
-    match_set_tp_src_masked(match, key->src_port, mask->src_port);
 
     if (flower->tunnel.tunnel) {
         match_set_tun_id(match, flower->tunnel.id);
@@ -748,13 +755,25 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
         flower.key.ip_proto = key->nw_proto;
         flower.mask.ip_proto = mask->nw_proto;
 
-        if (key->nw_proto == IPPROTO_TCP
-            || key->nw_proto == IPPROTO_UDP
-            || key->nw_proto == IPPROTO_SCTP) {
-            flower.key.dst_port = key->tp_dst;
-            flower.mask.dst_port = mask->tp_dst;
-            flower.key.src_port = key->tp_src;
-            flower.mask.src_port = mask->tp_src;
+        if (key->nw_proto == IPPROTO_TCP) {
+            flower.key.tcp_dst = key->tp_dst;
+            flower.mask.tcp_dst = mask->tp_dst;
+            flower.key.tcp_src = key->tp_src;
+            flower.mask.tcp_src = mask->tp_src;
+            mask->tp_src = 0;
+            mask->tp_dst = 0;
+        } else if (key->nw_proto == IPPROTO_UDP) {
+            flower.key.udp_dst = key->tp_dst;
+            flower.mask.udp_dst = mask->tp_dst;
+            flower.key.udp_src = key->tp_src;
+            flower.mask.udp_src = mask->tp_src;
+            mask->tp_src = 0;
+            mask->tp_dst = 0;
+        } else if (key->nw_proto == IPPROTO_SCTP) {
+            flower.key.sctp_dst = key->tp_dst;
+            flower.mask.sctp_dst = mask->tp_dst;
+            flower.key.sctp_src = key->tp_src;
+            flower.mask.sctp_src = mask->tp_src;
             mask->tp_src = 0;
             mask->tp_dst = 0;
         }

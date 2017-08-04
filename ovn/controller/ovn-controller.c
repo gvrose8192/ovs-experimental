@@ -531,6 +531,46 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     physical_register_ovs_idl(ovs_idl);
 }
 
+static void
+create_ovnsb_indexes(struct ovsdb_idl *ovnsb_idl)
+{
+    struct ovsdb_idl_index *index;
+
+    /* Index multicast group table by name and datapath. */
+    index = ovsdb_idl_create_index(ovnsb_idl, &sbrec_table_multicast_group,
+                                   "multicast-group-by-dp-name");
+    ovsdb_idl_index_add_column(index, &sbrec_multicast_group_col_name,
+                               OVSDB_INDEX_ASC, NULL);
+    ovsdb_idl_index_add_column(index, &sbrec_multicast_group_col_datapath,
+                               OVSDB_INDEX_ASC, NULL);
+
+    /* Index logical port table by name. */
+    index = ovsdb_idl_create_index(ovnsb_idl, &sbrec_table_port_binding,
+                                   "lport-by-name");
+    ovsdb_idl_index_add_column(index, &sbrec_port_binding_col_logical_port,
+                               OVSDB_INDEX_ASC, NULL);
+
+    /* Index logical port table by tunnel key and datapath. */
+    index = ovsdb_idl_create_index(ovnsb_idl, &sbrec_table_port_binding,
+                                   "lport-by-key");
+    ovsdb_idl_index_add_column(index, &sbrec_port_binding_col_tunnel_key,
+                               OVSDB_INDEX_ASC, NULL);
+    ovsdb_idl_index_add_column(index, &sbrec_port_binding_col_datapath,
+                               OVSDB_INDEX_ASC, NULL);
+
+    /* Index logical port table by datapath. */
+    index = ovsdb_idl_create_index(ovnsb_idl, &sbrec_table_port_binding,
+                                   "lport-by-datapath");
+    ovsdb_idl_index_add_column(index, &sbrec_port_binding_col_datapath,
+                               OVSDB_INDEX_ASC, NULL);
+
+    /* Index datapath binding table by tunnel key. */
+    index = ovsdb_idl_create_index(ovnsb_idl, &sbrec_table_datapath_binding,
+                                   "dpath-by-key");
+    ovsdb_idl_index_add_column(index, &sbrec_datapath_binding_col_tunnel_key,
+                               OVSDB_INDEX_ASC, NULL);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -575,6 +615,10 @@ main(int argc, char *argv[])
     char *ovnsb_remote = get_ovnsb_remote(ovs_idl_loop.idl);
     struct ovsdb_idl_loop ovnsb_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
         ovsdb_idl_create(ovnsb_remote, &sbrec_idl_class, true, true));
+
+    create_ovnsb_indexes(ovnsb_idl_loop.idl);
+    lport_init(ovnsb_idl_loop.idl);
+
     ovsdb_idl_omit_alert(ovnsb_idl_loop.idl, &sbrec_chassis_col_nb_cfg);
     update_sb_monitors(ovnsb_idl_loop.idl, NULL, NULL, NULL);
     ovsdb_idl_get_initial_snapshot(ovnsb_idl_loop.idl);
@@ -631,14 +675,8 @@ main(int argc, char *argv[])
         const struct ovsrec_bridge *br_int = get_br_int(&ctx);
         const char *chassis_id = get_chassis_id(ctx.ovs_idl);
 
-        struct ldatapath_index ldatapaths;
-        struct lport_index lports;
-        struct mcgroup_index mcgroups;
         struct chassis_index chassis_index;
 
-        ldatapath_index_init(&ldatapaths, ctx.ovnsb_idl);
-        lport_index_init(&lports, ctx.ovnsb_idl);
-        mcgroup_index_init(&mcgroups, ctx.ovnsb_idl);
         chassis_index_init(&chassis_index, ctx.ovnsb_idl);
 
         const struct sbrec_chassis *chassis = NULL;
@@ -646,7 +684,7 @@ main(int argc, char *argv[])
             chassis = chassis_run(&ctx, chassis_id, br_int);
             encaps_run(&ctx, br_int, chassis_id);
             bfd_calculate_active_tunnels(br_int, &active_tunnels);
-            binding_run(&ctx, br_int, chassis, &ldatapaths, &lports,
+            binding_run(&ctx, br_int, chassis,
                         &chassis_index, &active_tunnels, &local_datapaths,
                         &local_lports);
         }
@@ -659,7 +697,7 @@ main(int argc, char *argv[])
             enum mf_field_id mff_ovn_geneve = ofctrl_run(br_int,
                                                          &pending_ct_zones);
 
-            pinctrl_run(&ctx, &lports, br_int, chassis, &chassis_index,
+            pinctrl_run(&ctx, br_int, chassis, &chassis_index,
                         &local_datapaths, &active_tunnels);
             update_ct_zones(&local_lports, &local_datapaths, &ct_zones,
                             ct_zone_bitmap, &pending_ct_zones);
@@ -668,7 +706,7 @@ main(int argc, char *argv[])
                     commit_ct_zones(br_int, &pending_ct_zones);
 
                     struct hmap flow_table = HMAP_INITIALIZER(&flow_table);
-                    lflow_run(&ctx, chassis, &lports, &mcgroups,
+                    lflow_run(&ctx, chassis,
                               &chassis_index, &local_datapaths, &group_table,
                               &addr_sets, &flow_table, &active_tunnels);
 
@@ -677,7 +715,7 @@ main(int argc, char *argv[])
                                 &chassis_index);
                     }
                     physical_run(&ctx, mff_ovn_geneve,
-                                 br_int, chassis, &ct_zones, &lports,
+                                 br_int, chassis, &ct_zones,
                                  &flow_table, &local_datapaths, &local_lports,
                                  &chassis_index, &active_tunnels);
 
@@ -723,9 +761,6 @@ main(int argc, char *argv[])
             free(pending_pkt.flow_s);
         }
 
-        mcgroup_index_destroy(&mcgroups);
-        lport_index_destroy(&lports);
-        ldatapath_index_destroy(&ldatapaths);
         chassis_index_destroy(&chassis_index);
 
         sset_destroy(&local_lports);
