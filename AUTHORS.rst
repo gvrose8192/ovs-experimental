@@ -320,6 +320,7 @@ Venkata Anil Kommaddi           vkommadi@redhat.com
 Vivien Bernet-Rollande          vbr@soprive.net
 wangqianyu                      wang.qianyu@zte.com.cn
 Wang Sheng-Hui                  shhuiw@gmail.com
+Wang Zhike                      wangzhike@jd.com
 Wei Li                          liw@dtdream.com
 Wei Yongjun                     yjwei@cn.fujitsu.com
 Wenyu Zhang                     wenyuz@vmware.com
@@ -427,6 +428,7 @@ Gregor Schaffrath               grsch@net.t-labs.tu-berlin.de
 Gregory Smith                   gasmith@nutanix.com
 Guolin Yang                     gyang@vmware.com
 Gur Stavi                       gstavi@mrv.com
+Harish Kanakaraju               hkanakaraju@vmware.com
 Hari Sasank Bhamidipalli        hbhamidi@cisco.com
 Hassan Khan                     hassan.khan@seecs.edu.pk
 Hector Oron                     hector.oron@gmail.com
@@ -492,6 +494,7 @@ Mike Kruze                      mkruze@nicira.com
 Mike Qing                       mqing@vmware.com
 Min Chen                        ustcer.tonychan@gmail.com
 Mikael Doverhag                 mdoverhag@nicira.com
+Mircea Ulinic                   ping@mirceaulinic.net
 Mrinmoy Das                     mrdas@ixiacom.com
 Muhammad Shahbaz                mshahbaz@cs.princeton.edu
 Murali R                        muralirdev@gmail.com
