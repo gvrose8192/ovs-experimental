@@ -312,6 +312,8 @@ parse_tc_flower_to_match(struct tc_flower *flower,
             match_set_nw_proto(match, key->ip_proto);
         }
 
+        match_set_nw_ttl_masked(match, key->ip_ttl, mask->ip_ttl);
+
         match_set_nw_src_masked(match, key->ipv4.ipv4_src, mask->ipv4.ipv4_src);
         match_set_nw_dst_masked(match, key->ipv4.ipv4_dst, mask->ipv4.ipv4_dst);
 
@@ -323,6 +325,7 @@ parse_tc_flower_to_match(struct tc_flower *flower,
         if (key->ip_proto == IPPROTO_TCP) {
             match_set_tp_dst_masked(match, key->tcp_dst, mask->tcp_dst);
             match_set_tp_src_masked(match, key->tcp_src, mask->tcp_src);
+            match_set_tcp_flags_masked(match, key->tcp_flags, mask->tcp_flags);
         } else if (key->ip_proto == IPPROTO_UDP) {
             match_set_tp_dst_masked(match, key->udp_dst, mask->udp_dst);
             match_set_tp_src_masked(match, key->udp_src, mask->udp_src);
@@ -595,11 +598,6 @@ test_key_and_mask(struct match *match)
         return EOPNOTSUPP;
     }
 
-    if (mask->nw_ttl) {
-        VLOG_DBG_RL(&rl, "offloading attribute nw_ttl isn't supported");
-        return EOPNOTSUPP;
-    }
-
     if (mask->nw_frag) {
         VLOG_DBG_RL(&rl, "offloading attribute nw_frag isn't supported");
         return EOPNOTSUPP;
@@ -646,13 +644,6 @@ test_key_and_mask(struct match *match)
         if (mask->tp_dst) {
             VLOG_DBG_RL(&rl,
                         "offloading attribute icmp_code isn't supported");
-            return EOPNOTSUPP;
-        }
-    }
-    if (is_ip_any(key) && key->nw_proto == IPPROTO_TCP && mask->tcp_flags) {
-        if (mask->tcp_flags) {
-            VLOG_DBG_RL(&rl,
-                        "offloading attribute tcp_flags isn't supported");
             return EOPNOTSUPP;
         }
     }
@@ -757,14 +748,19 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
     if (is_ip_any(key)) {
         flower.key.ip_proto = key->nw_proto;
         flower.mask.ip_proto = mask->nw_proto;
+        flower.key.ip_ttl = key->nw_ttl;
+        flower.mask.ip_ttl = mask->nw_ttl;
 
         if (key->nw_proto == IPPROTO_TCP) {
             flower.key.tcp_dst = key->tp_dst;
             flower.mask.tcp_dst = mask->tp_dst;
             flower.key.tcp_src = key->tp_src;
             flower.mask.tcp_src = mask->tp_src;
+            flower.key.tcp_flags = key->tcp_flags;
+            flower.mask.tcp_flags = mask->tcp_flags;
             mask->tp_src = 0;
             mask->tp_dst = 0;
+            mask->tcp_flags = 0;
         } else if (key->nw_proto == IPPROTO_UDP) {
             flower.key.udp_dst = key->tp_dst;
             flower.mask.udp_dst = mask->tp_dst;
@@ -784,6 +780,7 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
         mask->nw_frag = 0;
         mask->nw_tos = 0;
         mask->nw_proto = 0;
+        mask->nw_ttl = 0;
 
         if (key->dl_type == htons(ETH_P_IP)) {
             flower.key.ipv4.ipv4_src = key->nw_src;
