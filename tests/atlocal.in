@@ -152,9 +152,11 @@ find_command nc
 
 # Determine correct netcat option to quit on stdin EOF
 if nc --version 2>&1 | grep -q nmap.org; then
-    NC_EOF_OPT="--send-only"
+    # Nmap netcat
+    NC_EOF_OPT="--send-only -w 5"
 else
-    NC_EOF_OPT="-q 1"
+    # BSD netcat
+    NC_EOF_OPT="-q 1 -w 5"
 fi
 
 # Set HAVE_TCPDUMP
