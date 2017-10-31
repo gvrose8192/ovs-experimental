@@ -178,6 +178,7 @@ Jorge Arturo Sauma Vargas       jorge.sauma@hpe.com
 Jun Nakajima                    jun.nakajima@intel.com
 JunoZhu                         zhunatuzi@gmail.com
 Justin Pettit                   jpettit@ovn.org
+Kaige Fu                        fukaige@huawei.com
 Keith Amidon                    keith@nicira.com
 Ken Ajiro                       ajiro@mxw.nes.nec.co.jp
 Kenneth Duda                    kduda@arista.com
@@ -263,6 +264,7 @@ Raymond Burkholder              ray@oneunified.net
 Reid Price                      reid@nicira.com
 Remko Tronçon                   git@el-tramo.be
 Rich Lane                       rlane@bigswitch.com
+Richard Oliver                  richard@richard-oliver.co.uk
 Rishi Bamba                     rishi.bamba@tcs.com
 Rob Adams                       readams@readams.net
 Robert Åkerblom-Andersson       Robert.nr1@gmail.com
