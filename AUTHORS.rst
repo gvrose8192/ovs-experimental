@@ -107,6 +107,7 @@ Dmitry Krivenok                 krivenok.dmitry@gmail.com
 Dominic Curran                  dominic.curran@citrix.com
 Dongdong                        dongdong1@huawei.com
 Dongjun                         dongj@dtdream.com
+Duan Jiong                      djduanjiong@gmail.com
 Duffie Cooley                   dcooley@nicira.com
 Dustin Lundquist                dustin@null-ptr.net
 Ed Maste                        emaste@freebsd.org
@@ -219,6 +220,7 @@ Markos Chandras                 mchandras@suse.de
 Martin Casado                   casado@nicira.com
 Martino Fornasa                 mf@fornasa.it
 Maryam Tahhan                   maryam.tahhan@intel.com
+Matteo Croce                    mcroce@redhat.com
 Mauricio Vásquez                mauricio.vasquezbernal@studenti.polito.it
 Maxime Coquelin                 maxime.coquelin@redhat.com
 Mehak Mahajan                   mmahajan@nicira.com

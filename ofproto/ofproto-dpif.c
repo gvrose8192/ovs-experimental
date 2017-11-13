@@ -62,7 +62,7 @@
 #include "ovs-lldp.h"
 #include "ovs-rcu.h"
 #include "ovs-router.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "seq.h"
 #include "simap.h"
 #include "smap.h"
@@ -92,7 +92,7 @@ struct ofbundle {
     char *name;                 /* Identifier for log messages. */
 
     /* Configuration. */
-    struct ovs_list ports;      /* Contains "struct ofport"s. */
+    struct ovs_list ports;      /* Contains "struct ofport_dpif"s. */
     enum port_vlan_mode vlan_mode; /* VLAN mode */
     uint16_t qinq_ethtype;
     int vlan;                   /* -1=trunk port, else a 12-bit VLAN ID. */
@@ -3011,15 +3011,16 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     size_t i;
     bool ok;
 
+    bundle = bundle_lookup(ofproto, aux);
+
     if (!s) {
-        bundle_destroy(bundle_lookup(ofproto, aux));
+        bundle_destroy(bundle);
         return 0;
     }
 
     ovs_assert(s->n_slaves == 1 || s->bond != NULL);
     ovs_assert((s->lacp != NULL) == (s->lacp_slaves != NULL));
 
-    bundle = bundle_lookup(ofproto, aux);
     if (!bundle) {
         bundle = xmalloc(sizeof *bundle);
 
