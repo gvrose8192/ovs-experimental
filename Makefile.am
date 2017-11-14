@@ -20,6 +20,7 @@ AM_CPPFLAGS += $(PTHREAD_INCLUDES)
 AM_CPPFLAGS += $(MSVC_CFLAGS)
 AM_LDFLAGS += $(PTHREAD_LDFLAGS)
 AM_LDFLAGS += $(MSVC64_LDFLAGS)
+PLATFORM = $(MSVC_PLATFORM)
 endif
 
 AM_CPPFLAGS += -I $(top_srcdir)/include
@@ -406,13 +407,13 @@ CLEANFILES += manpage-dep-check
 if VSTUDIO_DDK
 ALL_LOCAL += ovsext
 ovsext: datapath-windows/ovsext.sln $(srcdir)/datapath-windows/include/OvsDpInterface.h
-	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
-	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8.1$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
+	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
+	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8.1$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
 
 CLEAN_LOCAL += ovsext_clean
 ovsext_clean: datapath-windows/ovsext.sln
-	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
-	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8.1$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
+	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
+	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8.1$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
 endif
 .PHONY: ovsext
 
