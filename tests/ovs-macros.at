@@ -1,6 +1,5 @@
 AT_TESTED([ovs-vswitchd])
 AT_TESTED([ovs-vsctl])
-AT_TESTED([perl])
 
 m4_include([m4/compat.m4])
 
@@ -196,6 +195,10 @@ kill_ovs_vswitchd () {
 # multiple sequential spaces, but that doesn't really matter).
 wc () {
    command wc "$@" | tr -s ' ' ' ' | sed 's/^ *//'
+}
+
+uuidfilt () {
+    $PYTHON "$top_srcdir"/tests/uuidfilt.py "$@"
 }
 ]
 m4_divert_pop([PREPARE_TESTS])

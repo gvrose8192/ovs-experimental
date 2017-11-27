@@ -2196,7 +2196,7 @@ AT_CHECK(
      -- --id=@t0 create Flow_Table name=main \
      -- --id=@t1 create Flow_Table flow-limit=1024 \
      -- set bridge br0 'flow_tables={1=@t1,0=@t0}' \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 <1>
 ])
@@ -2348,7 +2348,7 @@ AT_CHECK(
      -- --id=@t0 create Flow_Table name=main \
      -- --id=@t1 create Flow_Table flow-limit=1024 \
      -- set bridge br0 'flow_tables={1=@t1,0=@t0}' \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 <1>
 ])
@@ -2603,7 +2603,7 @@ AT_CHECK(
      -- --id=@t0 create Flow_Table name=main \
      -- --id=@t1 create Flow_Table flow-limit=1024 \
      -- set bridge br0 'flow_tables={1=@t1,0=@t0}' \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 <1>
 ])
@@ -2655,7 +2655,7 @@ AT_CHECK(
   [ovs-vsctl \
      -- --id=@t0 create Flow_Table flow-limit=4 \
      -- set bridge br0 flow_tables:0=@t0 \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 ])
 # Add 4 flows.
@@ -2699,7 +2699,7 @@ AT_CHECK(
   [ovs-vsctl \
      -- --id=@t0 create Flow_Table flow-limit=4 \
      -- set bridge br0 flow_tables:0=@t0 \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 ])
 # Add 4 flows.
@@ -2738,7 +2738,7 @@ AT_CHECK(
   [ovs-vsctl \
      -- --id=@t0 create Flow_Table flow-limit=4 overflow-policy=evict \
      -- set bridge br0 flow_tables:0=@t0 \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 ])
 # Add 4 flows.
@@ -2796,7 +2796,7 @@ AT_CHECK(
   [ovs-vsctl \
      -- --id=@t0 create Flow_Table flow-limit=4 overflow-policy=evict \
      -- set bridge br0 flow_tables:0=@t0 \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 ])
 # Add 4 flows.
@@ -2855,7 +2855,7 @@ AT_CHECK(
   [ovs-vsctl \
      -- --id=@t0 create Flow_Table name=evict flow-limit=4 \
      -- set bridge br0 flow_tables:0=@t0 \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 ])
 # Use mod-table to turn on eviction just to demonstrate that it works.
@@ -2921,7 +2921,7 @@ AT_CHECK(
                                    overflow-policy=evict \
                                    groups='"NXM_OF_IN_PORT[[]]"' \
      -- set bridge br0 flow_tables:0=@t0 \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 ])
 # Add 4 flows.
@@ -3003,7 +3003,7 @@ AT_CHECK(
                                    overflow-policy=evict \
                                    groups='"NXM_OF_IN_PORT[[]]"' \
      -- set bridge br0 flow_tables:0=@t0 \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 ])
 # Add 4 flows.
@@ -3083,7 +3083,7 @@ AT_CHECK(
   [ovs-vsctl \
      -- --id=@t0 create Flow_Table flow-limit=4 overflow-policy=evict \
      -- set bridge br0 flow_tables:0=@t0 \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 ])
 ovs-appctl time/stop
@@ -3127,7 +3127,7 @@ AT_CHECK(
   [ovs-vsctl \
      -- --id=@t0 create Flow_Table flow-limit=4 overflow-policy=evict \
      -- set bridge br0 flow_tables:0=@t0 \
-   | ${PERL} $srcdir/uuidfilt.pl],
+   | uuidfilt],
   [0], [<0>
 ])
 # Add 4 flows.
@@ -4340,23 +4340,26 @@ AT_CLEANUP
 m4_divert_push([PREPARE_TESTS])
 # Sorts groups of lines that start with a space, without moving them
 # past the nearest line that does not start with a space.
+[
 multiline_sort () {
-    ${PERL} -e '
-        use warnings;
-        use strict;
-        my @buffer = ();
-        while (<STDIN>) {
-            if (/^ /) {
-                push(@buffer, $_);
-            } else {
-                print $_ foreach sort(@buffer);
-                print $_;
-                @buffer = ();
-            }
-        }
-        print $_ foreach sort(@buffer);
+    $PYTHON -c '
+import sys
+
+buffer = []
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    if line.startswith(" "):
+        buffer.append(line)
+    else:
+        sys.stdout.write("".join(sorted(buffer)))
+        sys.stdout.write(line)
+        buffer = []
+sys.stdout.write("".join(sorted(buffer)))
 '
 }
+]
 m4_divert_pop([PREPARE_TESTS])
 
 AT_SETUP([ofproto - flow monitoring])
@@ -4626,10 +4629,9 @@ ovs-appctl -t ovs-ofctl ofctl/block
 
 # Add $n_msgs flows.
 (echo "in_port=2,actions=output:2"
-${PERL} -e '
-    for ($i = 0; $i < '$n_msgs'; $i++) {
-        print "cookie=1,reg1=$i,actions=drop\n";
-    }
+$PYTHON -c '
+for i in range('$n_msgs'):
+    print("cookie=1,reg1=%d,actions=drop" % i)
 ') > flows.txt
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
 # Check that multipart flow dumps work properly:

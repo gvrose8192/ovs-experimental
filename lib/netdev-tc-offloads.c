@@ -581,12 +581,14 @@ parse_put_flow_set_masked_action(struct tc_flower *flower,
                                  bool hasmask)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
-    char *set_buff[set_len], *set_data, *set_mask;
+    char *set_buff[128], *set_data, *set_mask;
     char *key = (char *) &flower->rewrite.key;
     char *mask = (char *) &flower->rewrite.mask;
     const struct nlattr *attr;
     int i, j, type;
     size_t size;
+
+    ovs_assert(set_len <= 128);
 
     /* copy so we can set attr mask to 0 for used ovs key struct members  */
     memcpy(set_buff, set, set_len);
@@ -642,56 +644,54 @@ static int
 parse_put_flow_set_action(struct tc_flower *flower, const struct nlattr *set,
                           size_t set_len)
 {
-    const struct nlattr *set_attr;
-    size_t set_left;
+    const struct nlattr *tunnel;
+    const struct nlattr *tun_attr;
+    size_t tun_left, tunnel_len;
 
-    NL_ATTR_FOR_EACH_UNSAFE (set_attr, set_left, set, set_len) {
-        if (nl_attr_type(set_attr) == OVS_KEY_ATTR_TUNNEL) {
-            const struct nlattr *tunnel = nl_attr_get(set_attr);
-            const size_t tunnel_len = nl_attr_get_size(set_attr);
-            const struct nlattr *tun_attr;
-            size_t tun_left;
-
-            flower->set.set = true;
-            NL_ATTR_FOR_EACH_UNSAFE (tun_attr, tun_left, tunnel, tunnel_len) {
-                switch (nl_attr_type(tun_attr)) {
-                case OVS_TUNNEL_KEY_ATTR_ID: {
-                    flower->set.id = nl_attr_get_be64(tun_attr);
-                }
-                break;
-                case OVS_TUNNEL_KEY_ATTR_IPV4_SRC: {
-                    flower->set.ipv4.ipv4_src = nl_attr_get_be32(tun_attr);
-                }
-                break;
-                case OVS_TUNNEL_KEY_ATTR_IPV4_DST: {
-                    flower->set.ipv4.ipv4_dst = nl_attr_get_be32(tun_attr);
-                }
-                break;
-                case OVS_TUNNEL_KEY_ATTR_IPV6_SRC: {
-                    flower->set.ipv6.ipv6_src =
-                        nl_attr_get_in6_addr(tun_attr);
-                }
-                break;
-                case OVS_TUNNEL_KEY_ATTR_IPV6_DST: {
-                    flower->set.ipv6.ipv6_dst =
-                        nl_attr_get_in6_addr(tun_attr);
-                }
-                break;
-                case OVS_TUNNEL_KEY_ATTR_TP_SRC: {
-                    flower->set.tp_src = nl_attr_get_be16(tun_attr);
-                }
-                break;
-                case OVS_TUNNEL_KEY_ATTR_TP_DST: {
-                    flower->set.tp_dst = nl_attr_get_be16(tun_attr);
-                }
-                break;
-                }
-            }
-        } else {
+    if (nl_attr_type(set) != OVS_KEY_ATTR_TUNNEL) {
             return parse_put_flow_set_masked_action(flower, set, set_len,
                                                     false);
+    }
+
+    tunnel = nl_attr_get(set);
+    tunnel_len = nl_attr_get_size(set);
+
+    flower->set.set = true;
+    NL_ATTR_FOR_EACH_UNSAFE(tun_attr, tun_left, tunnel, tunnel_len) {
+        switch (nl_attr_type(tun_attr)) {
+        case OVS_TUNNEL_KEY_ATTR_ID: {
+            flower->set.id = nl_attr_get_be64(tun_attr);
+        }
+        break;
+        case OVS_TUNNEL_KEY_ATTR_IPV4_SRC: {
+            flower->set.ipv4.ipv4_src = nl_attr_get_be32(tun_attr);
+        }
+        break;
+        case OVS_TUNNEL_KEY_ATTR_IPV4_DST: {
+            flower->set.ipv4.ipv4_dst = nl_attr_get_be32(tun_attr);
+        }
+        break;
+        case OVS_TUNNEL_KEY_ATTR_IPV6_SRC: {
+            flower->set.ipv6.ipv6_src =
+                nl_attr_get_in6_addr(tun_attr);
+        }
+        break;
+        case OVS_TUNNEL_KEY_ATTR_IPV6_DST: {
+            flower->set.ipv6.ipv6_dst =
+                nl_attr_get_in6_addr(tun_attr);
+        }
+        break;
+        case OVS_TUNNEL_KEY_ATTR_TP_SRC: {
+            flower->set.tp_src = nl_attr_get_be16(tun_attr);
+        }
+        break;
+        case OVS_TUNNEL_KEY_ATTR_TP_DST: {
+            flower->set.tp_dst = nl_attr_get_be16(tun_attr);
+        }
+        break;
         }
     }
+
     return 0;
 }
 
