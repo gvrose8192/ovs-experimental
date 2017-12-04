@@ -665,6 +665,15 @@ requires_datapath_assistance(const struct nlattr *a)
     return false;
 }
 
+/* Executes all of the 'actions_len' bytes of datapath actions in 'actions' on
+ * the packets in 'batch'.  If 'steal' is true, possibly modifies and
+ * definitely free the packets in 'batch', otherwise leaves 'batch' unchanged.
+ *
+ * Some actions (e.g. output actions) can only be executed by a datapath.  This
+ * function implements those actions by passing the action and the packets to
+ * 'dp_execute_action' (along with 'dp').  If 'dp_execute_action' is passed a
+ * true 'may_steal' parameter then it may possibly modify and must definitely
+ * free the packets passed into it, otherwise it must leave them unchanged. */
 void
 odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                     const struct nlattr *actions, size_t actions_len,
@@ -686,9 +695,12 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
 
                 dp_execute_action(dp, batch, a, may_steal);
 
-                if (last_action) {
-                    /* We do not need to free the packets. dp_execute_actions()
-                     * has stolen them */
+                if (last_action || batch->count == 0) {
+                    /* We do not need to free the packets.
+                     * Either dp_execute_actions() has stolen them
+                     * or the batch is freed due to errors. In either
+                     * case we do not need to execute further actions.
+                     */
                     return;
                 }
             }
