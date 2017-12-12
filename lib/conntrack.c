@@ -67,6 +67,12 @@ enum ct_alg_mode {
     CT_TFTP_MODE,
 };
 
+enum ct_alg_ctl_type {
+    CT_ALG_CTL_NONE,
+    CT_ALG_CTL_FTP,
+    CT_ALG_CTL_TFTP,
+};
+
 static bool conn_key_extract(struct conntrack *, struct dp_packet *,
                              ovs_be16 dl_type, struct conn_lookup_ctx *,
                              uint16_t zone);
@@ -142,6 +148,13 @@ static enum ftp_ctl_pkt
 detect_ftp_ctl_type(const struct conn_lookup_ctx *ctx,
                     struct dp_packet *pkt);
 
+static struct ct_l4_proto *l4_protos[] = {
+    [IPPROTO_TCP] = &ct_proto_tcp,
+    [IPPROTO_UDP] = &ct_proto_other,
+    [IPPROTO_ICMP] = &ct_proto_icmp4,
+    [IPPROTO_ICMPV6] = &ct_proto_icmp6,
+};
+
 static void
 handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
                struct dp_packet *pkt,
@@ -150,14 +163,23 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
 
 static void
 handle_tftp_ctl(struct conntrack *ct,
+                const struct conn_lookup_ctx *ctx OVS_UNUSED,
+                struct dp_packet *pkt OVS_UNUSED,
                 const struct conn *conn_for_expectation,
-                long long now);
+                long long now, enum ftp_ctl_pkt ftp_ctl OVS_UNUSED,
+                bool nat OVS_UNUSED);
 
-static struct ct_l4_proto *l4_protos[] = {
-    [IPPROTO_TCP] = &ct_proto_tcp,
-    [IPPROTO_UDP] = &ct_proto_other,
-    [IPPROTO_ICMP] = &ct_proto_icmp4,
-    [IPPROTO_ICMPV6] = &ct_proto_icmp6,
+typedef void (*alg_helper)(struct conntrack *ct,
+                           const struct conn_lookup_ctx *ctx,
+                           struct dp_packet *pkt,
+                           const struct conn *conn_for_expectation,
+                           long long now, enum ftp_ctl_pkt ftp_ctl,
+                           bool nat);
+
+static alg_helper alg_helpers[] = {
+    [CT_ALG_CTL_NONE] = NULL,
+    [CT_ALG_CTL_FTP] = handle_ftp_ctl,
+    [CT_ALG_CTL_TFTP] = handle_tftp_ctl,
 };
 
 long long ct_timeout_val[] = {
@@ -434,35 +456,59 @@ get_ip_proto(const struct dp_packet *pkt)
 }
 
 static bool
-is_ftp_ctl(const struct dp_packet *pkt)
+is_ftp_ctl(const enum ct_alg_ctl_type ct_alg_ctl)
 {
-    uint8_t ip_proto = get_ip_proto(pkt);
-    struct tcp_header *th = dp_packet_l4(pkt);
-
-    /* CT_IPPORT_FTP is used because IPPORT_FTP in not defined in OSX,
-     * at least in in.h. Since this value will never change, just remove
-     * the external dependency. */
-#define CT_IPPORT_FTP 21
-
-    return (ip_proto == IPPROTO_TCP &&
-            (th->tcp_src == htons(CT_IPPORT_FTP) ||
-             th->tcp_dst == htons(CT_IPPORT_FTP)));
-
+    return ct_alg_ctl == CT_ALG_CTL_FTP;
 }
 
-static bool
-is_tftp_ctl(const struct dp_packet *pkt)
+static enum ct_alg_ctl_type
+get_alg_ctl_type(const struct dp_packet *pkt, ovs_be16 tp_src, ovs_be16 tp_dst,
+                 const char *helper)
 {
+    /* CT_IPPORT_FTP/TFTP is used because IPPORT_FTP/TFTP in not defined
+     * in OSX, at least in in.h. Since these values will never change, remove
+     * the external dependency. */
+    enum { CT_IPPORT_FTP = 21 };
+    enum { CT_IPPORT_TFTP = 69 };
     uint8_t ip_proto = get_ip_proto(pkt);
     struct udp_header *uh = dp_packet_l4(pkt);
+    struct tcp_header *th = dp_packet_l4(pkt);
+    ovs_be16 ftp_src_port = htons(CT_IPPORT_FTP);
+    ovs_be16 ftp_dst_port = htons(CT_IPPORT_FTP);
+    ovs_be16 tftp_dst_port = htons(CT_IPPORT_TFTP);
 
-    /* CT_IPPORT_TFTP is used because IPPORT_TFTP in not defined in OSX,
-     * at least in in.h. Since this value will never change, remove
-     * the external dependency. */
-#define CT_IPPORT_TFTP 69
-    return (ip_proto == IPPROTO_UDP &&
-            uh->udp_dst == htons(CT_IPPORT_TFTP));
+    if (OVS_UNLIKELY(tp_dst)) {
+        if (helper && !strncmp(helper, "ftp", strlen("ftp"))) {
+            ftp_dst_port = tp_dst;
+        } else if (helper && !strncmp(helper, "tftp", strlen("tftp"))) {
+            tftp_dst_port = tp_dst;
+        }
+    } else if (OVS_UNLIKELY(tp_src)) {
+        if (helper && !strncmp(helper, "ftp", strlen("ftp"))) {
+            ftp_src_port = tp_src;
+        }
+    }
 
+    if (ip_proto == IPPROTO_UDP && uh->udp_dst == tftp_dst_port) {
+        return CT_ALG_CTL_TFTP;
+    } else if (ip_proto == IPPROTO_TCP &&
+               (th->tcp_src == ftp_src_port || th->tcp_dst == ftp_dst_port)) {
+        return CT_ALG_CTL_FTP;
+    }
+    return CT_ALG_CTL_NONE;
+}
+
+static void
+handle_alg_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
+               struct dp_packet *pkt, enum ct_alg_ctl_type ct_alg_ctl,
+               const struct conn *conn, long long now, bool nat,
+               const struct conn *conn_for_expectation)
+{
+    /* ALG control packet handling with expectation creation. */
+    if (OVS_UNLIKELY(alg_helpers[ct_alg_ctl] && conn && conn->alg)) {
+        alg_helpers[ct_alg_ctl](ct, ctx, pkt, conn_for_expectation, now,
+                                CT_FTP_CTL_INTEREST, nat);
+    }
 }
 
 static void
@@ -773,6 +819,26 @@ conn_clean(struct conntrack *ct, struct conn *conn,
     }
 }
 
+static bool
+ct_verify_helper(const char *helper, enum ct_alg_ctl_type ct_alg_ctl)
+{
+    if (ct_alg_ctl == CT_ALG_CTL_NONE) {
+        return true;
+    } else if (helper) {
+        if ((ct_alg_ctl == CT_ALG_CTL_FTP) &&
+             !strncmp(helper, "ftp", strlen("ftp"))) {
+            return true;
+        } else if ((ct_alg_ctl == CT_ALG_CTL_TFTP) &&
+                   !strncmp(helper, "tftp", strlen("tftp"))) {
+            return true;
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+}
+
 /* This function is called with the bucket lock held. */
 static struct conn *
 conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
@@ -780,7 +846,8 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
                const struct nat_action_info_t *nat_action_info,
                struct conn *conn_for_un_nat_copy,
                const char *helper,
-               const struct alg_exp_node *alg_exp)
+               const struct alg_exp_node *alg_exp,
+               enum ct_alg_ctl_type ct_alg_ctl)
 {
     unsigned bucket = hash_to_bucket(ctx->hash);
     struct conn *nc = NULL;
@@ -809,8 +876,8 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
         nc->rev_key = nc->key;
         conn_key_reverse(&nc->rev_key);
 
-        if (helper) {
-            nc->alg = xstrdup(helper);
+        if (ct_verify_helper(helper, ct_alg_ctl)) {
+            nc->alg = nullable_xstrdup(helper);
         }
 
         if (alg_exp) {
@@ -1069,13 +1136,40 @@ is_un_nat_conn_valid(const struct conn *un_nat_conn)
     return un_nat_conn->conn_type == CT_CONN_TYPE_UN_NAT;
 }
 
+static bool
+conn_update_state_alg(struct conntrack *ct, struct dp_packet *pkt,
+                      struct conn_lookup_ctx *ctx, struct conn *conn,
+                      const struct nat_action_info_t *nat_action_info,
+                      enum ct_alg_ctl_type ct_alg_ctl, long long now,
+                      unsigned bucket, bool *create_new_conn)
+    OVS_REQUIRES(ct->buckets[bucket].lock)
+{
+    if (is_ftp_ctl(ct_alg_ctl)) {
+        /* Keep sequence tracking in sync with the source of the
+         * sequence skew. */
+        if (ctx->reply != conn->seq_skew_dir) {
+            handle_ftp_ctl(ct, ctx, pkt, conn, now, CT_FTP_CTL_OTHER,
+                           !!nat_action_info);
+            *create_new_conn = conn_update_state(ct, pkt, ctx, &conn, now,
+                                                bucket);
+        } else {
+            *create_new_conn = conn_update_state(ct, pkt, ctx, &conn, now,
+                                                bucket);
+            handle_ftp_ctl(ct, ctx, pkt, conn, now, CT_FTP_CTL_OTHER,
+                           !!nat_action_info);
+        }
+        return true;
+    }
+    return false;
+}
+
 static void
 process_one(struct conntrack *ct, struct dp_packet *pkt,
             struct conn_lookup_ctx *ctx, uint16_t zone,
             bool force, bool commit, long long now, const uint32_t *setmark,
             const struct ovs_key_ct_labels *setlabel,
             const struct nat_action_info_t *nat_action_info,
-            const char *helper)
+            ovs_be16 tp_src, ovs_be16 tp_dst, const char *helper)
 {
     struct conn *conn;
     unsigned bucket = hash_to_bucket(ctx->hash);
@@ -1121,24 +1215,15 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
     bool create_new_conn = false;
     struct conn conn_for_un_nat_copy;
     conn_for_un_nat_copy.conn_type = CT_CONN_TYPE_DEFAULT;
-    bool ftp_ctl = is_ftp_ctl(pkt);
+
+    enum ct_alg_ctl_type ct_alg_ctl = get_alg_ctl_type(pkt, tp_src, tp_dst,
+                                                       helper);
 
     if (OVS_LIKELY(conn)) {
-        if (ftp_ctl) {
-            /* Keep sequence tracking in sync with the source of the
-             * sequence skew. */
-            if (ctx->reply != conn->seq_skew_dir) {
-                handle_ftp_ctl(ct, ctx, pkt, conn, now, CT_FTP_CTL_OTHER,
-                               !!nat_action_info);
-                create_new_conn = conn_update_state(ct, pkt, ctx, &conn, now,
-                                                    bucket);
-            } else {
-                create_new_conn = conn_update_state(ct, pkt, ctx, &conn, now,
-                                                    bucket);
-                handle_ftp_ctl(ct, ctx, pkt, conn, now, CT_FTP_CTL_OTHER,
-                               !!nat_action_info);
-            }
-        } else {
+        if (OVS_LIKELY(!conn_update_state_alg(ct, pkt, ctx, conn,
+                                              nat_action_info,
+                                              ct_alg_ctl, now, bucket,
+                                              &create_new_conn))) {
             create_new_conn = conn_update_state(ct, pkt, ctx, &conn, now,
                                                 bucket);
         }
@@ -1174,7 +1259,8 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
         ct_rwlock_unlock(&ct->resources_lock);
 
         conn = conn_not_found(ct, pkt, ctx, commit, now, nat_action_info,
-                              &conn_for_un_nat_copy, helper, alg_exp);
+                              &conn_for_un_nat_copy, helper, alg_exp,
+                              ct_alg_ctl);
     }
 
     write_ct_md(pkt, zone, conn, &ctx->key, alg_exp);
@@ -1187,9 +1273,8 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
         set_label(pkt, conn, &setlabel[0], &setlabel[1]);
     }
 
-    bool tftp_ctl = is_tftp_ctl(pkt);
     struct conn conn_for_expectation;
-    if (OVS_UNLIKELY((ftp_ctl || tftp_ctl) && conn)) {
+    if (OVS_UNLIKELY((ct_alg_ctl != CT_ALG_CTL_NONE) && conn)) {
         conn_for_expectation = *conn;
     }
 
@@ -1199,13 +1284,8 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
         create_un_nat_conn(ct, &conn_for_un_nat_copy, now, !!alg_exp);
     }
 
-    /* FTP control packet handling with expectation creation. */
-    if (OVS_UNLIKELY(ftp_ctl && conn)) {
-        handle_ftp_ctl(ct, ctx, pkt, &conn_for_expectation,
-                       now, CT_FTP_CTL_INTEREST, !!nat_action_info);
-    } else if (OVS_UNLIKELY(tftp_ctl && conn)) {
-        handle_tftp_ctl(ct, &conn_for_expectation, now);
-    }
+    handle_alg_ctl(ct, ctx, pkt, ct_alg_ctl, conn, now, !!nat_action_info,
+                   &conn_for_expectation);
 }
 
 /* Sends the packets in '*pkt_batch' through the connection tracker 'ct'.  All
@@ -1221,7 +1301,7 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
                   ovs_be16 dl_type, bool force, bool commit, uint16_t zone,
                   const uint32_t *setmark,
                   const struct ovs_key_ct_labels *setlabel,
-                  const char *helper,
+                  ovs_be16 tp_src, ovs_be16 tp_dst, const char *helper,
                   const struct nat_action_info_t *nat_action_info,
                   long long now)
 {
@@ -1235,8 +1315,8 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
             write_ct_md(packet, zone, NULL, NULL, NULL);
             continue;
         }
-        process_one(ct, packet, &ctx, zone, force, commit,
-                    now, setmark, setlabel, nat_action_info, helper);
+        process_one(ct, packet, &ctx, zone, force, commit, now, setmark,
+                    setlabel, nat_action_info, tp_src, tp_dst, helper);
     }
 
     return 0;
@@ -1702,8 +1782,7 @@ extract_l4_icmp(struct conn_key *key, const void *data, size_t size,
             return false;
         }
 
-        if (inner_key.src.addr.ipv4_aligned != key->dst.addr.ipv4_aligned
-            || inner_key.dst.addr.ipv4_aligned != key->src.addr.ipv4_aligned) {
+        if (inner_key.src.addr.ipv4_aligned != key->dst.addr.ipv4_aligned) {
             return false;
         }
 
@@ -1791,9 +1870,7 @@ extract_l4_icmp6(struct conn_key *key, const void *data, size_t size,
 
         /* pf doesn't do this, but it seems a good idea */
         if (!ipv6_addr_equals(&inner_key.src.addr.ipv6_aligned,
-                              &key->dst.addr.ipv6_aligned)
-            || !ipv6_addr_equals(&inner_key.dst.addr.ipv6_aligned,
-                                 &key->src.addr.ipv6_aligned)) {
+                              &key->dst.addr.ipv6_aligned)) {
             return false;
         }
 
@@ -3099,8 +3176,11 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
 
 static void
 handle_tftp_ctl(struct conntrack *ct,
+                const struct conn_lookup_ctx *ctx OVS_UNUSED,
+                struct dp_packet *pkt OVS_UNUSED,
                 const struct conn *conn_for_expectation,
-                long long now)
+                long long now, enum ftp_ctl_pkt ftp_ctl OVS_UNUSED,
+                bool nat OVS_UNUSED)
 {
     expectation_create(ct, conn_for_expectation->key.src.port, now,
                        CT_TFTP_MODE, conn_for_expectation);

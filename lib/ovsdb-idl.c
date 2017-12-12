@@ -79,29 +79,62 @@ struct ovsdb_idl_arc {
     struct ovsdb_idl_row *dst;  /* Destination row. */
 };
 
+/* Connection state machine.
+ *
+ * When a JSON-RPC session connects, the IDL sends a "get_schema" request and
+ * transitions to IDL_S_SCHEMA_REQUESTED.  If the session drops and reconnects,
+ * the IDL starts over again in the same way. */
 enum ovsdb_idl_state {
+    /* Waits for "get_schema" reply, then sends a "monitor_cond" request whose
+     * details are informed by the schema and transitions to
+     * IDL_S_MONITOR_COND_REQUESTED. */
     IDL_S_SCHEMA_REQUESTED,
-    IDL_S_MONITOR_REQUESTED,
-    IDL_S_MONITORING,
+
+    /* Waits for "monitor_cond" reply:
+     *
+     *    - If the reply indicates success, replaces the IDL contents by the
+     *      data carried in the reply and transitions to IDL_S_MONITORING_COND.
+     *
+     *    - If the reply indicates failure because the database is too old to
+     *      support monitor_cond, sends a "monitor" request and transitions to
+     *      IDl_S_MONITOR_REQUESTED.  */
     IDL_S_MONITOR_COND_REQUESTED,
+
+    /* Waits for "monitor" reply, then replaces the IDL contents by the data
+     * carried in the reply and transitions to IDL_S_MONITORING.  */
+    IDL_S_MONITOR_REQUESTED,
+
+    /* Terminal states that process "update2" (IDL_S_MONITORING_COND) or
+     * "update" (IDL_S_MONITORING) notifications. */
     IDL_S_MONITORING_COND,
+    IDL_S_MONITORING,
+
+    /* Terminal error state that indicates that nothing useful can be done.
+     * The most likely reason is that the database server doesn't have the
+     * desired database.  We maintain the session with the database server
+     * anyway.  If it starts serving the database that we want, then it will
+     * kill the session and we will automatically reconnect and try again. */
     IDL_S_NO_SCHEMA
 };
 
 struct ovsdb_idl {
+    /* Data. */
     const struct ovsdb_idl_class *class_;
-    struct jsonrpc_session *session;
-    struct uuid uuid;
     struct shash table_by_name; /* Contains "struct ovsdb_idl_table *"s.*/
     struct ovsdb_idl_table *tables; /* Array of ->class_->n_tables elements. */
     unsigned int change_seqno;
-    bool verify_write_only;
 
-    /* Session state. */
-    unsigned int state_seqno;
-    enum ovsdb_idl_state state;
-    struct json *request_id;
-    struct json *schema;
+    /* Session state.
+     *
+     *'state_seqno' is a snapshot of the session's sequence number as returned
+     * jsonrpc_session_get_seqno(session), so if it differs from the value that
+     * function currently returns then the session has reconnected and the
+     * state machine must restart.  */
+    struct jsonrpc_session *session; /* Connection to the server. */
+    enum ovsdb_idl_state state;      /* Current session state. */
+    unsigned int state_seqno;        /* See above. */
+    struct json *request_id;         /* JSON ID for request awaiting reply. */
+    struct json *schema;             /* Temporary copy of database schema. */
 
     /* Database locking. */
     char *lock_name;            /* Name of lock we need, NULL if none. */
@@ -112,6 +145,7 @@ struct ovsdb_idl {
     /* Transaction support. */
     struct ovsdb_idl_txn *txn;
     struct hmap outstanding_txns;
+    bool verify_write_only;
 
     /* Conditional monitoring. */
     bool cond_changed;
@@ -309,7 +343,6 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     idl->schema = NULL;
 
     hmap_init(&idl->outstanding_txns);
-    uuid_generate(&idl->uuid);
 
     return idl;
 }
@@ -517,8 +550,8 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
                    && idl->state == IDL_S_MONITOR_COND_REQUESTED
                    && idl->request_id
                    && json_equal(idl->request_id, msg->id)) {
-            if (msg->error && !strcmp(json_string(msg->error),
-                                      "unknown method")) {
+            if (msg->error && msg->error->type == JSON_STRING
+                && !strcmp(json_string(msg->error), "unknown method")) {
                 /* Fall back to using "monitor" method.  */
                 json_destroy(idl->request_id);
                 idl->request_id = NULL;
@@ -1117,10 +1150,9 @@ ovsdb_idl_condition_clone(struct ovsdb_idl_condition *dst,
 /* Sets the replication condition for 'tc' in 'idl' to 'condition' and
  * arranges to send the new condition to the database server.
  *
- * Return the next conditional update sequence number. When this
- * value and ovsdb_idl_get_condition_seqno() matchs, the 'idl'
- * contains rows that match the 'condition'.
- */
+ * Return the next conditional update sequence number.  When this
+ * value and ovsdb_idl_get_condition_seqno() matches, the 'idl'
+ * contains rows that match the 'condition'. */
 unsigned int
 ovsdb_idl_set_condition(struct ovsdb_idl *idl,
                         const struct ovsdb_idl_table_class *tc,
@@ -1177,8 +1209,7 @@ static void
 ovsdb_idl_send_cond_change(struct ovsdb_idl *idl)
 {
     int i;
-    char uuid[UUID_LEN + 1];
-    struct json *params, *json_uuid;
+    struct json *params;
     struct jsonrpc_msg *request;
 
     /* When 'idl-request_id' is not NULL, there is an outstanding
@@ -1210,15 +1241,8 @@ ovsdb_idl_send_cond_change(struct ovsdb_idl *idl)
 
     /* Send request if not empty. */
     if (monitor_cond_change_requests) {
-        snprintf(uuid, sizeof uuid, UUID_FMT,
-                 UUID_ARGS(&idl->uuid));
-        json_uuid = json_string_create(uuid);
-
-        /* Create a new uuid */
-        uuid_generate(&idl->uuid);
-        snprintf(uuid, sizeof uuid, UUID_FMT,
-                 UUID_ARGS(&idl->uuid));
-        params = json_array_create_3(json_uuid, json_string_create(uuid),
+        params = json_array_create_3(json_string_create("monid"),
+                                     json_string_create("monid"),
                                      monitor_cond_change_requests);
 
         request = jsonrpc_create_request("monitor_cond_change", params,
@@ -1519,7 +1543,6 @@ ovsdb_idl_send_monitor_request__(struct ovsdb_idl *idl,
     struct shash *schema;
     struct json *monitor_requests;
     struct jsonrpc_msg *msg;
-    char uuid[UUID_LEN + 1];
     size_t i;
 
     schema = parse_schema(idl->schema);
@@ -1578,11 +1601,10 @@ ovsdb_idl_send_monitor_request__(struct ovsdb_idl *idl,
 
     json_destroy(idl->request_id);
 
-    snprintf(uuid, sizeof uuid, UUID_FMT, UUID_ARGS(&idl->uuid));
     msg = jsonrpc_create_request(
         method,
         json_array_create_3(json_string_create(idl->class_->database),
-                            json_string_create(uuid), monitor_requests),
+                            json_string_create("monid"), monitor_requests),
         &idl->request_id);
     jsonrpc_session_send(idl->session, msg);
     idl->cond_changed = false;
@@ -1597,12 +1619,12 @@ ovsdb_idl_send_monitor_request(struct ovsdb_idl *idl)
 static void
 log_parse_update_error(struct ovsdb_error *error)
 {
-        if (!VLOG_DROP_WARN(&syntax_rl)) {
-            char *s = ovsdb_error_to_string(error);
-            VLOG_WARN_RL(&syntax_rl, "%s", s);
-            free(s);
-        }
-        ovsdb_error_destroy(error);
+    if (!VLOG_DROP_WARN(&syntax_rl)) {
+        char *s = ovsdb_error_to_string(error);
+        VLOG_WARN_RL(&syntax_rl, "%s", s);
+        free(s);
+    }
+    ovsdb_error_destroy(error);
 }
 
 static void
@@ -1865,9 +1887,9 @@ ovsdb_idl_process_update2(struct ovsdb_idl_table *table,
             return false;
         }
     } else {
-            VLOG_WARN_RL(&semantic_rl, "unknown operation %s to "
-                         "table %s", operation, table->class_->name);
-            return false;
+        VLOG_WARN_RL(&semantic_rl, "unknown operation %s to "
+                     "table %s", operation, table->class_->name);
+        return false;
     }
 
     return true;
@@ -3515,12 +3537,28 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
             }
         } else if (row->old_datum != row->new_datum) {
             struct json *row_json;
-            struct json *op;
             size_t idx;
 
-            op = json_object_create();
-            json_object_put_string(op, "op", row->old_datum ? "update"
-                                                            : "insert");
+            if (!row->old_datum && class->is_singleton) {
+                /* We're inserting a row into a table that allows only a
+                 * single row.  (This is a fairly common OVSDB pattern for
+                 * storing global data.)  Verify that the table is empty
+                 * before inserting the row, so that we get a clear
+                 * verification-related failure if there was an insertion
+                 * race with another client. */
+                struct json *op = json_object_create();
+                json_array_add(operations, op);
+                json_object_put_string(op, "op", "wait");
+                json_object_put_string(op, "table", class->name);
+                json_object_put(op, "where", json_array_create_empty());
+                json_object_put(op, "timeout", json_integer_create(0));
+                json_object_put_string(op, "until", "==");
+                json_object_put(op, "rows", json_array_create_empty());
+            }
+
+            struct json *op = json_object_create();
+            json_object_put_string(op, "op",
+                                   row->old_datum ? "update" : "insert");
             json_object_put_string(op, "table", class->name);
             if (row->old_datum) {
                 json_object_put(op, "where", where_uuid_equals(&row->uuid));
