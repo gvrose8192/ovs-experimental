@@ -16,10 +16,11 @@
 
 #include "ofproto/ofproto-dpif-xlate-cache.h"
 
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <net/if.h>
-#include <netinet/in.h>
 #include <sys/socket.h>
 
 #include "bfd.h"
@@ -279,6 +280,9 @@ xlate_cache_clear(struct xlate_cache *xcache)
 void
 xlate_cache_uninit(struct xlate_cache *xcache)
 {
+    if (!xcache) {
+        return;
+    }
     xlate_cache_clear(xcache);
     ofpbuf_uninit(&xcache->entries);
 }

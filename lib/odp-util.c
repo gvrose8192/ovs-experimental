@@ -15,12 +15,13 @@
  */
 
 #include <config.h>
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include "odp-util.h"
 #include <errno.h>
 #include <inttypes.h>
 #include <math.h>
-#include <netinet/in.h>
 #include <netinet/icmp6.h>
 #include <netinet/ip6.h>
 #include <stdlib.h>
@@ -1965,20 +1966,19 @@ parse_odp_action(const char *s, const struct simap *port_names,
     if (!strncmp(s, "set(", 4)) {
         size_t start_ofs;
         int retval;
-        struct nlattr mask[128 / sizeof(struct nlattr)];
-        struct ofpbuf maskbuf;
+        struct nlattr mask[1024 / sizeof(struct nlattr)];
+        struct ofpbuf maskbuf = OFPBUF_STUB_INITIALIZER(mask);
         struct nlattr *nested, *key;
         size_t size;
-
-        /* 'mask' is big enough to hold any key. */
-        ofpbuf_use_stack(&maskbuf, mask, sizeof mask);
 
         start_ofs = nl_msg_start_nested(actions, OVS_ACTION_ATTR_SET);
         retval = parse_odp_key_mask_attr(s + 4, port_names, actions, &maskbuf);
         if (retval < 0) {
+            ofpbuf_uninit(&maskbuf);
             return retval;
         }
         if (s[retval + 4] != ')') {
+            ofpbuf_uninit(&maskbuf);
             return -EINVAL;
         }
 
@@ -2005,6 +2005,7 @@ parse_odp_action(const char *s, const struct simap *port_names,
                 nested->nla_type = OVS_ACTION_ATTR_SET_MASKED;
             }
         }
+        ofpbuf_uninit(&maskbuf);
 
         nl_msg_end_nested(actions, start_ofs);
         return retval + 5;
@@ -3500,8 +3501,9 @@ generate_all_wildcard_mask(const struct attr_len_tbl tbl[], int max,
         size_t nested_mask;
 
         if (tbl[type].next) {
-            tbl = tbl[type].next;
-            max = tbl[type].next_max;
+            const struct attr_len_tbl *entry = &tbl[type];
+            tbl = entry->next;
+            max = entry->next_max;
         }
 
         nested_mask = nl_msg_start_nested(ofp, type);

@@ -5,9 +5,11 @@ Post-v2.8.0
      * New high-level documentation in ovsdb(7).
      * New file format documentation for developers in ovsdb(5).
      * Protocol documentation moved from ovsdb-server(1) to ovsdb-server(7).
-     * ovsdb-client: New "get-schema-cksum" command.
-     * ovsdb-client: New "backup" command.
+     * ovsdb-client: New "get-schema-cksum" and "query" commands.
+     * ovsdb-client: New "backup" and "restore" commands.
      * ovsdb-tool: New "db-name" and "schema-name" commands.
+   - ovs-vsctl and other commands that display data in tables now support a
+     --max-column-width option to limit column width.
    - OVN:
      * The "requested-chassis" option for a logical switch port now accepts a
        chassis "hostname" in addition to a chassis "name".
@@ -25,6 +27,8 @@ Post-v2.8.0
    - DPDK:
      * Add support for DPDK v17.11
      * Add support for vHost IOMMU
+   - vswitchd:
+     * Datapath IDs may now be specified as 0x1 (etc.) instead of 16 digits.
 
 v2.8.0 - 31 Aug 2017
 --------------------

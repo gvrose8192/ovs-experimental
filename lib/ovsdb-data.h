@@ -173,6 +173,11 @@ struct ovsdb_error *ovsdb_transient_datum_from_json(
                                           const struct ovsdb_type *,
                                           const struct json *)
     OVS_WARN_UNUSED_RESULT;
+struct ovsdb_error *
+ovsdb_unconstrained_datum_from_json(struct ovsdb_datum *,
+                                    const struct ovsdb_type *,
+                                    const struct json *)
+    OVS_WARN_UNUSED_RESULT;
 struct json *ovsdb_datum_to_json(const struct ovsdb_datum *,
                                  const struct ovsdb_type *);
 
@@ -243,6 +248,11 @@ void ovsdb_datum_add_unsafe(struct ovsdb_datum *,
                             const union ovsdb_atom *value,
                             const struct ovsdb_type *,
                             const union ovsdb_atom *range_end_atom);
+
+/* Transactions with named-uuid row names. */
+struct json *ovsdb_datum_to_json_with_row_names(const struct ovsdb_datum *,
+                                                const struct ovsdb_type *);
+char *ovsdb_data_row_name(const struct uuid *);
 
 /* Type checking. */
 static inline bool

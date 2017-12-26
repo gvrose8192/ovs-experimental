@@ -17,10 +17,11 @@
 #include "ofproto/ofproto-dpif-xlate.h"
 
 #include <errno.h>
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
 
 #include "bfd.h"
 #include "bitmap.h"
@@ -1387,7 +1388,7 @@ xlate_lookup_ofproto(const struct dpif_backer *backer, const struct flow *flow,
 }
 
 /* Given a datapath and flow metadata ('backer', and 'flow' respectively),
- * optionally populates 'ofproto' with the ofproto_dpif, 'ofp_in_port' with the
+ * optionally populates 'ofprotop' with the ofproto_dpif, 'ofp_in_port' with the
  * openflow in_port, and 'ipfix', 'sflow', and 'netflow' with the appropriate
  * handles for those protocols if they're enabled.  Caller may use the returned
  * pointers until quiescing, for longer term use additional references must
