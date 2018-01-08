@@ -203,6 +203,7 @@ Lili Huang                      huanglili.huang@huawei.com
 Linda Sun                       lsun@vmware.com
 Lior Neudorfer                  lior@guardicore.com
 Lorand Jakab                    lojakab@cisco.com
+Lorenzo Bianconi                lorenzo.bianconi@redhat.com
 Luca Giraudo                    lgiraudo@nicira.com
 Lucas Alvares Gomes             lucasagomes@gmail.com
 Lucian Petrut                   lpetrut@cloudbasesolutions.com
@@ -401,6 +402,7 @@ Ben Basler                      bbasler@nicira.com
 Bhargava Shastry                bshastry@sec.t-labs.tu-berlin.de
 Bob Ball                        bob.ball@citrix.com
 Brad Hall                       brad@nicira.com
+Brad Cowie                      brad@wand.net.nz
 Brailey Josh                    josh@faucet.nz
 Brandon Heller                  brandonh@stanford.edu
 Brendan Kelley                  bkelley@nicira.com
