@@ -5760,8 +5760,8 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
     case OVS_ACTION_ATTR_PUSH_ETH:
     case OVS_ACTION_ATTR_POP_ETH:
     case OVS_ACTION_ATTR_CLONE:
-    case OVS_ACTION_ATTR_ENCAP_NSH:
-    case OVS_ACTION_ATTR_DECAP_NSH:
+    case OVS_ACTION_ATTR_PUSH_NSH:
+    case OVS_ACTION_ATTR_POP_NSH:
     case __OVS_ACTION_ATTR_MAX:
         OVS_NOT_REACHED();
     }
@@ -5846,6 +5846,30 @@ dpif_netdev_ct_flush(struct dpif *dpif, const uint16_t *zone,
     return conntrack_flush(&dp->conntrack, zone);
 }
 
+static int
+dpif_netdev_ct_set_maxconns(struct dpif *dpif, uint32_t maxconns)
+{
+    struct dp_netdev *dp = get_dp_netdev(dpif);
+
+    return conntrack_set_maxconns(&dp->conntrack, maxconns);
+}
+
+static int
+dpif_netdev_ct_get_maxconns(struct dpif *dpif, uint32_t *maxconns)
+{
+    struct dp_netdev *dp = get_dp_netdev(dpif);
+
+    return conntrack_get_maxconns(&dp->conntrack, maxconns);
+}
+
+static int
+dpif_netdev_ct_get_nconns(struct dpif *dpif, uint32_t *nconns)
+{
+    struct dp_netdev *dp = get_dp_netdev(dpif);
+
+    return conntrack_get_nconns(&dp->conntrack, nconns);
+}
+
 const struct dpif_class dpif_netdev_class = {
     "netdev",
     dpif_netdev_init,
@@ -5891,6 +5915,9 @@ const struct dpif_class dpif_netdev_class = {
     dpif_netdev_ct_dump_next,
     dpif_netdev_ct_dump_done,
     dpif_netdev_ct_flush,
+    dpif_netdev_ct_set_maxconns,
+    dpif_netdev_ct_get_maxconns,
+    dpif_netdev_ct_get_nconns,
     dpif_netdev_meter_get_features,
     dpif_netdev_meter_set,
     dpif_netdev_meter_get,

@@ -2989,6 +2989,9 @@ const struct dpif_class dpif_netlink_class = {
     dpif_netlink_ct_dump_next,
     dpif_netlink_ct_dump_done,
     dpif_netlink_ct_flush,
+    NULL,                       /* ct_set_maxconns */
+    NULL,                       /* ct_get_maxconns */
+    NULL,                       /* ct_get_nconns */
     dpif_netlink_meter_get_features,
     dpif_netlink_meter_set,
     dpif_netlink_meter_get,
