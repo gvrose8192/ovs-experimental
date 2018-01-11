@@ -1789,9 +1789,6 @@ port_construct(struct ofport *port_)
         }
 
         port->is_tunnel = true;
-        if (ofproto->ipfix) {
-           dpif_ipfix_add_tunnel_port(ofproto->ipfix, port_, port->odp_port);
-        }
     } else {
         /* Sanity-check that a mapping doesn't already exist.  This
          * shouldn't happen for non-tunnel ports. */
@@ -1811,6 +1808,9 @@ port_construct(struct ofport *port_)
 
     if (ofproto->sflow) {
         dpif_sflow_add_port(ofproto->sflow, port_, port->odp_port);
+    }
+    if (ofproto->ipfix) {
+       dpif_ipfix_add_port(ofproto->ipfix, port_, port->odp_port);
     }
 
     return 0;
@@ -1863,10 +1863,6 @@ port_destruct(struct ofport *port_, bool del)
         atomic_count_dec(&ofproto->backer->tnl_count);
     }
 
-    if (port->is_tunnel && ofproto->ipfix) {
-       dpif_ipfix_del_tunnel_port(ofproto->ipfix, port->odp_port);
-    }
-
     tnl_port_del(port, port->odp_port);
     sset_find_and_delete(&ofproto->ports, devname);
     sset_find_and_delete(&ofproto->ghost_ports, devname);
@@ -1880,6 +1876,9 @@ port_destruct(struct ofport *port_, bool del)
     set_rstp_port(port_, NULL);
     if (ofproto->sflow) {
         dpif_sflow_del_port(ofproto->sflow, port->odp_port);
+    }
+    if (ofproto->ipfix) {
+       dpif_ipfix_del_port(ofproto->ipfix, port->odp_port);
     }
 
     free(port->qdscp);
@@ -2006,13 +2005,11 @@ set_ipfix(
             di, bridge_exporter_options, flow_exporters_options,
             n_flow_exporters_options);
 
-        /* Add tunnel ports only when a new ipfix created */
+        /* Add ports only when a new ipfix created */
         if (new_di == true) {
             struct ofport_dpif *ofport;
             HMAP_FOR_EACH (ofport, up.hmap_node, &ofproto->up.ports) {
-                if (ofport->is_tunnel == true) {
-                    dpif_ipfix_add_tunnel_port(di, &ofport->up, ofport->odp_port);
-                }
+                dpif_ipfix_add_port(di, &ofport->up, ofport->odp_port);
             }
         }
 
@@ -4193,12 +4190,16 @@ check_mask(struct ofproto_dpif *ofproto, const struct miniflow *flow)
     support = &ofproto->backer->rt_support.odp;
     ct_state = MINIFLOW_GET_U8(flow, ct_state);
 
+    if (ct_state & CS_UNSUPPORTED_MASK) {
+        return OFPERR_OFPBMC_BAD_MASK;
+    }
+
     /* Do not bother dissecting the flow further if the datapath supports all
      * the features we know of. */
     if (support->ct_state && support->ct_zone && support->ct_mark
         && support->ct_label && support->ct_state_nat
         && support->ct_orig_tuple && support->ct_orig_tuple6) {
-        return ct_state & CS_UNSUPPORTED_MASK ? OFPERR_OFPBMC_BAD_MASK : 0;
+        return 0;
     }
 
     ct_zone = MINIFLOW_GET_U16(flow, ct_zone);
@@ -4206,31 +4207,30 @@ check_mask(struct ofproto_dpif *ofproto, const struct miniflow *flow)
     ct_label = MINIFLOW_GET_U128(flow, ct_label);
 
     if ((ct_state && !support->ct_state)
-        || (ct_state & CS_UNSUPPORTED_MASK)
         || ((ct_state & (CS_SRC_NAT | CS_DST_NAT)) && !support->ct_state_nat)
         || (ct_zone && !support->ct_zone)
         || (ct_mark && !support->ct_mark)
         || (!ovs_u128_is_zero(ct_label) && !support->ct_label)) {
-        return OFPERR_OFPBMC_BAD_MASK;
+        return OFPERR_NXBMC_CT_DATAPATH_SUPPORT;
     }
 
     if (!support->ct_orig_tuple && !support->ct_orig_tuple6
         && (MINIFLOW_GET_U8(flow, ct_nw_proto)
             || MINIFLOW_GET_U16(flow, ct_tp_src)
             || MINIFLOW_GET_U16(flow, ct_tp_dst))) {
-        return OFPERR_OFPBMC_BAD_MASK;
+        return OFPERR_NXBMC_CT_DATAPATH_SUPPORT;
     }
 
     if (!support->ct_orig_tuple
         && (MINIFLOW_GET_U32(flow, ct_nw_src)
             || MINIFLOW_GET_U32(flow, ct_nw_dst))) {
-        return OFPERR_OFPBMC_BAD_MASK;
+        return OFPERR_NXBMC_CT_DATAPATH_SUPPORT;
     }
 
     if (!support->ct_orig_tuple6
         && (!ovs_u128_is_zero(MINIFLOW_GET_U128(flow, ct_ipv6_src))
             || !ovs_u128_is_zero(MINIFLOW_GET_U128(flow, ct_ipv6_dst)))) {
-        return OFPERR_OFPBMC_BAD_MASK;
+        return OFPERR_NXBMC_CT_DATAPATH_SUPPORT;
     }
 
     return 0;
@@ -4261,11 +4261,11 @@ check_actions(const struct ofproto_dpif *ofproto,
 
             if (!support->ct_state) {
                 report_unsupported_act("ct", "ct action");
-                return OFPERR_OFPBAC_BAD_TYPE;
+                return OFPERR_NXBAC_CT_DATAPATH_SUPPORT;
             }
             if ((ct->zone_imm || ct->zone_src.field) && !support->ct_zone) {
                 report_unsupported_act("ct", "ct zones");
-                return OFPERR_OFPBAC_BAD_ARGUMENT;
+                return OFPERR_NXBAC_CT_DATAPATH_SUPPORT;
             }
             /* So far the force commit feature is implemented together with the
              * original direction tuple feature by all datapaths, so we use the
@@ -4273,7 +4273,7 @@ check_actions(const struct ofproto_dpif *ofproto,
              * force commit feature as well. */
             if ((ct->flags & NX_CT_F_FORCE) && !support->ct_orig_tuple) {
                 report_unsupported_act("ct", "force commit");
-                return OFPERR_OFPBAC_BAD_ARGUMENT;
+                return OFPERR_NXBAC_CT_DATAPATH_SUPPORT;
             }
 
             OFPACT_FOR_EACH(a, ct->actions, ofpact_ct_get_action_len(ct)) {
@@ -4284,12 +4284,12 @@ check_actions(const struct ofproto_dpif *ofproto,
                      * 'ct_state': assume that it doesn't support the NAT
                      * action. */
                     report_unsupported_act("ct", "nat");
-                    return OFPERR_OFPBAC_BAD_TYPE;
+                    return OFPERR_NXBAC_CT_DATAPATH_SUPPORT;
                 }
                 if (dst && ((dst->id == MFF_CT_MARK && !support->ct_mark) ||
                             (dst->id == MFF_CT_LABEL && !support->ct_label))) {
                     report_unsupported_act("ct", "setting mark and/or label");
-                    return OFPERR_OFPBAC_BAD_SET_ARGUMENT;
+                    return OFPERR_NXBAC_CT_DATAPATH_SUPPORT;
                 }
             }
         } else if (ofpact->type == OFPACT_RESUBMIT) {
@@ -4298,7 +4298,7 @@ check_actions(const struct ofproto_dpif *ofproto,
             if (resubmit->with_ct_orig && !support->ct_orig_tuple) {
                 report_unsupported_act("resubmit",
                                        "ct original direction tuple");
-                return OFPERR_OFPBAC_BAD_TYPE;
+                return OFPERR_NXBAC_CT_DATAPATH_SUPPORT;
             }
         }
     }
