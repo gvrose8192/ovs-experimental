@@ -1,6 +1,8 @@
 Post-v2.8.0
 --------------------
    - NSH implementation now conforms to latest draft (draft-ietf-sfc-nsh-28).
+     * Add ttl field.
+     * Add a new action dec_nsh_ttl.
    - OVSDB:
      * New high-level documentation in ovsdb(7).
      * New file format documentation for developers in ovsdb(5).
@@ -44,6 +46,7 @@ Post-v2.8.0
      * Datapath IDs may now be specified as 0x1 (etc.) instead of 16 digits.
      * Configuring a controller, or unconfiguring all controllers, now deletes
        all groups and meters (as well as all flows).
+   - New --enable-sparse configure option enables "sparse" checking by default.
 
 v2.8.0 - 31 Aug 2017
 --------------------
