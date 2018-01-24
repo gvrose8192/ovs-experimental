@@ -65,6 +65,7 @@
 #include "tnl-ports.h"
 #include "tunnel.h"
 #include "util.h"
+#include "uuid.h"
 
 COVERAGE_DEFINE(xlate_actions);
 COVERAGE_DEFINE(xlate_actions_oversize);
@@ -147,6 +148,9 @@ struct xport {
 
     struct hmap_node ofp_node;       /* Node in parent xbridge 'xports' map. */
     ofp_port_t ofp_port;             /* Key in parent xbridge 'xports' map. */
+
+    struct hmap_node uuid_node;      /* Node in global 'xports_uuid' map. */
+    struct uuid uuid;                /* Key in global 'xports_uuid' map. */
 
     odp_port_t odp_port;             /* Datapath port number or ODPP_NONE. */
 
@@ -503,6 +507,7 @@ struct xlate_cfg {
     struct hmap xbridges;
     struct hmap xbundles;
     struct hmap xports;
+    struct hmap xports_uuid;
 };
 static OVSRCU_TYPE(struct xlate_cfg *) xcfgp = OVSRCU_INITIALIZER(NULL);
 static struct xlate_cfg *new_xcfg = NULL;
@@ -556,6 +561,8 @@ static struct xbundle *xbundle_lookup(struct xlate_cfg *,
                                       const struct ofbundle *);
 static struct xport *xport_lookup(struct xlate_cfg *,
                                   const struct ofport_dpif *);
+static struct xport *xport_lookup_by_uuid(struct xlate_cfg *,
+                                          const struct uuid *);
 static struct xport *get_ofp_port(const struct xbridge *, ofp_port_t ofp_port);
 static struct skb_priority_to_dscp *get_skb_priority(const struct xport *,
                                                      uint32_t skb_priority);
@@ -823,6 +830,8 @@ xlate_xport_init(struct xlate_cfg *xcfg, struct xport *xport)
                 hash_pointer(xport->ofport, 0));
     hmap_insert(&xport->xbridge->xports, &xport->ofp_node,
                 hash_ofp_port(xport->ofp_port));
+    hmap_insert(&xcfg->xports_uuid, &xport->uuid_node,
+                uuid_hash(&xport->uuid));
 }
 
 static void
@@ -1011,6 +1020,7 @@ xlate_xport_copy(struct xbridge *xbridge, struct xbundle *xbundle,
     new_xport->ofport = xport->ofport;
     new_xport->ofp_port = xport->ofp_port;
     new_xport->xbridge = xbridge;
+    new_xport->uuid = xport->uuid;
     xlate_xport_init(new_xcfg, new_xport);
 
     xlate_xport_set(new_xport, xport->odp_port, xport->netdev, xport->cfm,
@@ -1081,6 +1091,7 @@ xlate_txn_start(void)
     hmap_init(&new_xcfg->xbridges);
     hmap_init(&new_xcfg->xbundles);
     hmap_init(&new_xcfg->xports);
+    hmap_init(&new_xcfg->xports_uuid);
 
     xcfg = ovsrcu_get(struct xlate_cfg *, &xcfgp);
     if (!xcfg) {
@@ -1109,6 +1120,7 @@ xlate_xcfg_free(struct xlate_cfg *xcfg)
     hmap_destroy(&xcfg->xbridges);
     hmap_destroy(&xcfg->xbundles);
     hmap_destroy(&xcfg->xports);
+    hmap_destroy(&xcfg->xports_uuid);
     free(xcfg);
 }
 
@@ -1270,6 +1282,7 @@ xlate_ofport_set(struct ofproto_dpif *ofproto, struct ofbundle *ofbundle,
         xport->ofport = ofport;
         xport->xbridge = xbridge_lookup(new_xcfg, ofproto);
         xport->ofp_port = ofp_port;
+        uuid_generate(&xport->uuid);
 
         xlate_xport_init(new_xcfg, xport);
     }
@@ -1334,6 +1347,7 @@ xlate_xport_remove(struct xlate_cfg *xcfg, struct xport *xport)
     hmap_destroy(&xport->skb_priorities);
 
     hmap_remove(&xcfg->xports, &xport->hmap_node);
+    hmap_remove(&xcfg->xports_uuid, &xport->uuid_node);
     hmap_remove(&xport->xbridge->xports, &xport->ofp_node);
 
     netdev_close(xport->netdev);
@@ -1362,12 +1376,36 @@ xlate_lookup_ofproto_(const struct dpif_backer *backer, const struct flow *flow,
     struct xlate_cfg *xcfg = ovsrcu_get(struct xlate_cfg *, &xcfgp);
     const struct xport *xport;
 
+    /* If packet is recirculated, xport can be retrieved from frozen state. */
+    if (flow->recirc_id) {
+        const struct recirc_id_node *recirc_id_node;
+
+        recirc_id_node = recirc_id_node_find(flow->recirc_id);
+
+        if (OVS_UNLIKELY(!recirc_id_node)) {
+            return NULL;
+        }
+
+        /* If recirculation was initiated due to bond (in_port = OFPP_NONE)
+         * then frozen state is static and xport_uuid is not defined, so xport
+         * cannot be restored from frozen state. */
+        if (recirc_id_node->state.metadata.in_port != OFPP_NONE) {
+            struct uuid xport_uuid = recirc_id_node->state.xport_uuid;
+            xport = xport_lookup_by_uuid(xcfg, &xport_uuid);
+            if (xport && xport->xbridge && xport->xbridge->ofproto) {
+                goto out;
+            }
+        }
+    }
+
     xport = xport_lookup(xcfg, tnl_port_should_receive(flow)
                          ? tnl_port_receive(flow)
                          : odp_port_to_ofport(backer, flow->in_port.odp_port));
     if (OVS_UNLIKELY(!xport)) {
         return NULL;
     }
+
+out:
     *xportp = xport;
     if (ofp_in_port) {
         *ofp_in_port = xport->ofp_port;
@@ -1499,6 +1537,26 @@ xport_lookup(struct xlate_cfg *xcfg, const struct ofport_dpif *ofport)
     HMAP_FOR_EACH_IN_BUCKET (xport, hmap_node, hash_pointer(ofport, 0),
                              xports) {
         if (xport->ofport == ofport) {
+            return xport;
+        }
+    }
+    return NULL;
+}
+
+static struct xport *
+xport_lookup_by_uuid(struct xlate_cfg *xcfg, const struct uuid *uuid)
+{
+    struct hmap *xports;
+    struct xport *xport;
+
+    if (uuid_is_zero(uuid) || !xcfg) {
+        return NULL;
+    }
+
+    xports = &xcfg->xports_uuid;
+
+    HMAP_FOR_EACH_IN_BUCKET (xport, uuid_node, uuid_hash(uuid), xports) {
+        if (uuid_equals(&xport->uuid, uuid)) {
             return xport;
         }
     }
@@ -3264,6 +3322,9 @@ native_tunnel_output(struct xlate_ctx *ctx, const struct xport *xport,
     char buf_sip6[INET6_ADDRSTRLEN];
     char buf_dip6[INET6_ADDRSTRLEN];
 
+    /* Store sFlow data. */
+    uint32_t sflow_n_outputs = ctx->sflow_n_outputs;
+
     /* Structures to backup Ethernet and IP of base_flow. */
     struct flow old_base_flow;
     struct flow old_flow;
@@ -3415,6 +3476,10 @@ native_tunnel_output(struct xlate_ctx *ctx, const struct xport *xport,
     /* Restore the flows after the translation. */
     memcpy(&ctx->xin->flow, &old_flow, sizeof ctx->xin->flow);
     memcpy(&ctx->base_flow, &old_base_flow, sizeof ctx->base_flow);
+
+    /* Restore sFlow data. */
+    ctx->sflow_n_outputs = sflow_n_outputs;
+
     return 0;
 }
 
@@ -4473,6 +4538,7 @@ finish_freezing__(struct xlate_ctx *ctx, uint8_t table)
         .stack_size = ctx->stack.size,
         .mirrors = ctx->mirrors,
         .conntracked = ctx->conntracked,
+        .xport_uuid = ctx->xin->xport_uuid,
         .ofpacts = ctx->frozen_actions.data,
         .ofpacts_len = ctx->frozen_actions.size,
         .action_set = ctx->action_set.data,
@@ -6513,6 +6579,7 @@ xlate_in_init(struct xlate_in *xin, struct ofproto_dpif *ofproto,
     xin->odp_actions = odp_actions;
     xin->in_packet_out = false;
     xin->recirc_queue = NULL;
+    xin->xport_uuid = UUID_ZERO;
 
     /* Do recirc lookup. */
     xin->frozen_state = NULL;
@@ -6938,6 +7005,9 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
      * flow->in_port is the ultimate input port of the packet.) */
     struct xport *in_port = get_ofp_port(xbridge,
                                          ctx.base_flow.in_port.ofp_port);
+    if (in_port && !in_port->peer) {
+        ctx.xin->xport_uuid = in_port->uuid;
+    }
 
     if (flow->packet_type != htonl(PT_ETH) && in_port &&
         in_port->pt_mode == NETDEV_PT_LEGACY_L3 && ctx.table_id == 0) {
@@ -7177,6 +7247,7 @@ xlate_resume(struct ofproto_dpif *ofproto,
         .stack_size = pin->stack_size,
         .mirrors = pin->mirrors,
         .conntracked = pin->conntracked,
+        .xport_uuid = UUID_ZERO,
 
         /* When there are no actions, xlate_actions() will search the flow
          * table.  We don't want it to do that (we want it to resume), so
