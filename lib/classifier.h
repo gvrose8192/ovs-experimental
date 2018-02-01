@@ -284,7 +284,7 @@
  *
  * The classifier may safely be accessed by many reader threads concurrently
  * and by a single writer, or by multiple writers when they guarantee mutually
- * exlucive access to classifier modifications.
+ * exclusive access to classifier modifications.
  *
  * Since the classifier rules are RCU protected, the rule destruction after
  * removal from the classifier must be RCU postponed.  Also, when versioning is
@@ -387,8 +387,8 @@ const struct cls_rule *classifier_replace(struct classifier *,
                                           ovs_version_t,
                                           const struct cls_conjunction *,
                                           size_t n_conjunctions);
-const struct cls_rule *classifier_remove(struct classifier *,
-                                         const struct cls_rule *);
+bool classifier_remove(struct classifier *, const struct cls_rule *);
+void classifier_remove_assert(struct classifier *, const struct cls_rule *);
 static inline void classifier_defer(struct classifier *);
 static inline void classifier_publish(struct classifier *);
 
