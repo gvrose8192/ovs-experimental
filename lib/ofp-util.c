@@ -2453,12 +2453,11 @@ ofputil_start_queue_get_config_reply(const struct ofp_header *request,
                                      struct ovs_list *replies)
 {
     struct ofpbuf *reply;
-    enum ofperr error;
     ofp_port_t port;
     uint32_t queue;
 
-    error = ofputil_decode_queue_get_config_request(request, &port, &queue);
-    ovs_assert(!error);
+    ovs_assert(!ofputil_decode_queue_get_config_request(request, &port,
+                                                        &queue));
 
     enum ofpraw raw = ofpraw_decode_assert(request);
     switch ((int) raw) {
@@ -6227,8 +6226,7 @@ ofputil_decode_role_status(const struct ofp_header *oh,
                            struct ofputil_role_status *rs)
 {
     struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
-    enum ofpraw raw = ofpraw_pull_assert(&b);
-    ovs_assert(raw == OFPRAW_OFPT14_ROLE_STATUS);
+    ovs_assert(ofpraw_pull_assert(&b) == OFPRAW_OFPT14_ROLE_STATUS);
 
     const struct ofp14_role_status *r = b.msg;
     if (r->role != htonl(OFPCR12_ROLE_NOCHANGE) &&
@@ -6292,8 +6290,7 @@ ofputil_decode_requestforward(const struct ofp_header *outer,
     struct ofpbuf b = ofpbuf_const_initializer(outer, ntohs(outer->length));
 
     /* Skip past outer message. */
-    enum ofpraw outer_raw = ofpraw_pull_assert(&b);
-    ovs_assert(outer_raw == OFPRAW_OFPT14_REQUESTFORWARD);
+    ovs_assert(ofpraw_pull_assert(&b) == OFPRAW_OFPT14_REQUESTFORWARD);
 
     /* Validate inner message. */
     if (b.size < sizeof(struct ofp_header)) {
@@ -7378,16 +7375,16 @@ ofputil_port_get_reserved_name(ofp_port_t port)
     }
 }
 
-/* A port name doesn't need to be quoted if it is alphanumeric and starts with
- * a letter. */
+/* A table or port name doesn't need to be quoted if it is alphanumeric and
+ * starts with a letter. */
 static bool
-port_name_needs_quotes(const char *port_name)
+name_needs_quotes(const char *name)
 {
-    if (!isalpha((unsigned char) port_name[0])) {
+    if (!isalpha((unsigned char) name[0])) {
         return true;
     }
 
-    for (const char *p = port_name + 1; *p; p++) {
+    for (const char *p = name + 1; *p; p++) {
         if (!isalnum((unsigned char) *p)) {
             return true;
         }
@@ -7395,13 +7392,14 @@ port_name_needs_quotes(const char *port_name)
     return false;
 }
 
+/* Appends port or table 'name' to 's', quoting it if necessary. */
 static void
-put_port_name(const char *port_name, struct ds *s)
+put_name(const char *name, struct ds *s)
 {
-    if (port_name_needs_quotes(port_name)) {
-        json_string_escape(port_name, s);
+    if (name_needs_quotes(name)) {
+        json_string_escape(name, s);
     } else {
-        ds_put_cstr(s, port_name);
+        ds_put_cstr(s, name);
     }
 }
 
@@ -7420,7 +7418,7 @@ ofputil_format_port(ofp_port_t port, const struct ofputil_port_map *port_map,
 
     const char *port_name = ofputil_port_map_get_name(port_map, port);
     if (port_name) {
-        put_port_name(port_name, s);
+        put_name(port_name, s);
         return;
     }
 
@@ -7445,7 +7443,7 @@ ofputil_port_to_string(ofp_port_t port,
     const char *port_name = ofputil_port_map_get_name(port_map, port);
     if (port_name) {
         struct ds s = DS_EMPTY_INITIALIZER;
-        put_port_name(port_name, &s);
+        put_name(port_name, &s);
         ovs_strlcpy(namebuf, ds_cstr(&s), bufsize);
         ds_destroy(&s);
         return;
@@ -7454,12 +7452,14 @@ ofputil_port_to_string(ofp_port_t port,
     snprintf(namebuf, bufsize, "%"PRIu32, port);
 }
 
-/* ofputil_port_map.  */
-struct ofputil_port_map_node {
+/* ofputil_name_map.  */
+
+struct ofputil_name_map_node {
     struct hmap_node name_node;
     struct hmap_node number_node;
-    ofp_port_t ofp_port;        /* Port number. */
-    char *name;                 /* Port name. */
+
+    uint32_t number;
+    char *name;
 
     /* OpenFlow doesn't require port names to be unique, although that's the
      * only sensible way.  However, even in Open vSwitch it's possible for two
@@ -7469,22 +7469,25 @@ struct ofputil_port_map_node {
      * corner case.
      *
      * OpenFlow does require port numbers to be unique.  We check for duplicate
-     * ports numbers just in case a switch has a bug. */
+     * ports numbers just in case a switch has a bug.
+     *
+     * OpenFlow doesn't require table names to be unique and Open vSwitch
+     * doesn't try to make them unique. */
     bool duplicate;
 };
 
-void
-ofputil_port_map_init(struct ofputil_port_map *map)
+static void
+ofputil_name_map_init(struct ofputil_name_map *map)
 {
     hmap_init(&map->by_name);
     hmap_init(&map->by_number);
 }
 
-static struct ofputil_port_map_node *
-ofputil_port_map_find_by_name(const struct ofputil_port_map *map,
+static struct ofputil_name_map_node *
+ofputil_name_map_find_by_name(const struct ofputil_name_map *map,
                               const char *name)
 {
-    struct ofputil_port_map_node *node;
+    struct ofputil_name_map_node *node;
 
     HMAP_FOR_EACH_WITH_HASH (node, name_node, hash_string(name, 0),
                              &map->by_name) {
@@ -7495,38 +7498,38 @@ ofputil_port_map_find_by_name(const struct ofputil_port_map *map,
     return NULL;
 }
 
-static struct ofputil_port_map_node *
-ofputil_port_map_find_by_number(const struct ofputil_port_map *map,
-                                ofp_port_t ofp_port)
+static struct ofputil_name_map_node *
+ofputil_name_map_find_by_number(const struct ofputil_name_map *map,
+                                uint32_t number)
 {
-    struct ofputil_port_map_node *node;
+    struct ofputil_name_map_node *node;
 
-    HMAP_FOR_EACH_IN_BUCKET (node, number_node, hash_ofp_port(ofp_port),
+    HMAP_FOR_EACH_IN_BUCKET (node, number_node, hash_int(number, 0),
                              &map->by_number) {
-        if (node->ofp_port == ofp_port) {
+        if (node->number == number) {
             return node;
         }
     }
     return NULL;
 }
 
-void
-ofputil_port_map_put(struct ofputil_port_map *map,
-                     ofp_port_t ofp_port, const char *name)
+static void
+ofputil_name_map_put(struct ofputil_name_map *map,
+                     uint32_t number, const char *name)
 {
-    struct ofputil_port_map_node *node;
+    struct ofputil_name_map_node *node;
 
     /* Look for duplicate name. */
-    node = ofputil_port_map_find_by_name(map, name);
+    node = ofputil_name_map_find_by_name(map, name);
     if (node) {
-        if (node->ofp_port != ofp_port) {
+        if (node->number != number) {
             node->duplicate = true;
         }
         return;
     }
 
     /* Look for duplicate number. */
-    node = ofputil_port_map_find_by_number(map, ofp_port);
+    node = ofputil_name_map_find_by_number(map, number);
     if (node) {
         node->duplicate = true;
         return;
@@ -7534,36 +7537,18 @@ ofputil_port_map_put(struct ofputil_port_map *map,
 
     /* Add new node. */
     node = xmalloc(sizeof *node);
-    hmap_insert(&map->by_number, &node->number_node, hash_ofp_port(ofp_port));
+    hmap_insert(&map->by_number, &node->number_node, hash_int(number, 0));
     hmap_insert(&map->by_name, &node->name_node, hash_string(name, 0));
-    node->ofp_port = ofp_port;
+    node->number = number;
     node->name = xstrdup(name);
     node->duplicate = false;
 }
 
-const char *
-ofputil_port_map_get_name(const struct ofputil_port_map *map,
-                          ofp_port_t ofp_port)
-{
-    struct ofputil_port_map_node *node
-        = map ? ofputil_port_map_find_by_number(map, ofp_port) : NULL;
-    return node && !node->duplicate ? node->name : NULL;
-}
-
-ofp_port_t
-ofputil_port_map_get_number(const struct ofputil_port_map *map,
-                            const char *name)
-{
-    struct ofputil_port_map_node *node
-        = map ? ofputil_port_map_find_by_name(map, name) : NULL;
-    return node && !node->duplicate ? node->ofp_port : OFPP_NONE;
-}
-
-void
-ofputil_port_map_destroy(struct ofputil_port_map *map)
+static void
+ofputil_name_map_destroy(struct ofputil_name_map *map)
 {
     if (map) {
-        struct ofputil_port_map_node *node, *next;
+        struct ofputil_name_map_node *node, *next;
 
         HMAP_FOR_EACH_SAFE (node, next, name_node, &map->by_name) {
             hmap_remove(&map->by_name, &node->name_node);
@@ -7574,6 +7559,173 @@ ofputil_port_map_destroy(struct ofputil_port_map *map)
         hmap_destroy(&map->by_name);
         hmap_destroy(&map->by_number);
     }
+}
+
+/* ofputil_port_map.  */
+
+void
+ofputil_port_map_init(struct ofputil_port_map *map)
+{
+    ofputil_name_map_init(&map->map);
+}
+
+void
+ofputil_port_map_put(struct ofputil_port_map *map,
+                     ofp_port_t ofp_port, const char *name)
+{
+    ofputil_name_map_put(&map->map, ofp_to_u16(ofp_port), name);
+}
+
+const char *
+ofputil_port_map_get_name(const struct ofputil_port_map *map,
+                          ofp_port_t ofp_port)
+{
+    struct ofputil_name_map_node *node
+        = (map
+           ? ofputil_name_map_find_by_number(&map->map, ofp_to_u16(ofp_port))
+           : NULL);
+    return node && !node->duplicate ? node->name : NULL;
+}
+
+ofp_port_t
+ofputil_port_map_get_number(const struct ofputil_port_map *map,
+                            const char *name)
+{
+    struct ofputil_name_map_node *node
+        = map ? ofputil_name_map_find_by_name(&map->map, name) : NULL;
+    return node && !node->duplicate ? u16_to_ofp(node->number) : OFPP_NONE;
+}
+
+void
+ofputil_port_map_destroy(struct ofputil_port_map *map)
+{
+    ofputil_name_map_destroy(&map->map);
+}
+
+
+/* ofputil_table_map.  */
+
+void
+ofputil_table_map_init(struct ofputil_table_map *map)
+{
+    ofputil_name_map_init(&map->map);
+}
+
+void
+ofputil_table_map_put(struct ofputil_table_map *map,
+                      uint8_t table_id, const char *name)
+{
+    ofputil_name_map_put(&map->map, table_id, name);
+}
+
+const char *
+ofputil_table_map_get_name(const struct ofputil_table_map *map,
+                           uint8_t table_id)
+{
+    struct ofputil_name_map_node *node
+        = map ? ofputil_name_map_find_by_number(&map->map, table_id) : NULL;
+    return node && !node->duplicate ? node->name : NULL;
+}
+
+uint8_t
+ofputil_table_map_get_number(const struct ofputil_table_map *map,
+                             const char *name)
+{
+    struct ofputil_name_map_node *node
+        = map ? ofputil_name_map_find_by_name(&map->map, name) : NULL;
+    return node && !node->duplicate ? node->number : UINT8_MAX;
+}
+
+void
+ofputil_table_map_destroy(struct ofputil_table_map *map)
+{
+    ofputil_name_map_destroy(&map->map);
+}
+
+/* Table numbers. */
+
+/* Stores the table number represented by 's' into '*tablep'.  's' may be an
+ * integer or, if 'table_map' is nonnull, a name (quoted or unquoted).
+ *
+ * Returns true if successful, false if 's' is not a valid OpenFlow table
+ * number or name.  The caller should issue an error message in this case,
+ * because this function usually does not.  (This gives the caller an
+ * opportunity to look up the table name another way, e.g. by contacting the
+ * switch and listing the names of all its tables). */
+bool
+ofputil_table_from_string(const char *s,
+                          const struct ofputil_table_map *table_map,
+                          uint8_t *tablep)
+{
+    *tablep = 0;
+    if (*s == '-') {
+        VLOG_WARN("Negative value %s is not a valid table number.", s);
+        return false;
+    }
+
+    unsigned int table;
+    if (str_to_uint(s, 10, &table)) {
+        if (table > 255) {
+            VLOG_WARN("table %u is outside the supported range 0 through 255",
+                      table);
+            return false;
+        }
+        *tablep = table;
+        return true;
+    } else {
+        if (s[0] != '"') {
+            table = ofputil_table_map_get_number(table_map, s);
+        } else {
+            size_t length = strlen(s);
+            char *name = NULL;
+            if (length > 1
+                && s[length - 1] == '"'
+                && json_string_unescape(s + 1, length - 2, &name)) {
+                table = ofputil_table_map_get_number(table_map, name);
+            }
+            free(name);
+        }
+        if (table != UINT8_MAX) {
+            *tablep = table;
+            return true;
+        }
+
+        return false;
+    }
+}
+
+/* Appends to 's' a string representation of the OpenFlow table number 'table',
+ * either the table number or a name drawn from 'table_map'. */
+void
+ofputil_format_table(uint8_t table, const struct ofputil_table_map *table_map,
+                     struct ds *s)
+{
+    const char *table_name = ofputil_table_map_get_name(table_map, table);
+    if (table_name) {
+        put_name(table_name, s);
+    } else {
+        ds_put_format(s, "%"PRIu8, table);
+    }
+}
+
+/* Puts in the 'bufsize' byte in 'namebuf' a null-terminated string
+ * representation of OpenFlow table number 'table', either the table's number
+ * or a name drawn from 'table_map'. */
+void
+ofputil_table_to_string(uint8_t table,
+                        const struct ofputil_table_map *table_map,
+                        char *namebuf, size_t bufsize)
+{
+    const char *table_name = ofputil_table_map_get_name(table_map, table);
+    if (table_name) {
+        struct ds s = DS_EMPTY_INITIALIZER;
+        put_name(table_name, &s);
+        ovs_strlcpy(namebuf, ds_cstr(&s), bufsize);
+        ds_destroy(&s);
+        return;
+    }
+
+    snprintf(namebuf, bufsize, "%"PRIu8, table);
 }
 
 /* Stores the group id represented by 's' into '*group_idp'.  's' may be an

@@ -3221,7 +3221,7 @@ query_tables(struct ofproto *ofproto,
         struct ofputil_table_features *f = &features[i];
 
         f->table_id = i;
-        sprintf(f->name, "table%d", i);
+        f->name[0] = '\0';
         f->metadata_match = OVS_BE64_MAX;
         f->metadata_write = OVS_BE64_MAX;
         atomic_read_relaxed(&ofproto->tables[i].miss_config, &f->miss_config);
@@ -4395,7 +4395,8 @@ flow_stats_ds(struct ofproto *ofproto, struct rule *rule, struct ds *results)
     ds_put_char(results, ',');
 
     ds_put_cstr(results, "actions=");
-    ofpacts_format(actions->ofpacts, actions->ofpacts_len, NULL, results);
+    struct ofpact_format_params fp = { .s = results };
+    ofpacts_format(actions->ofpacts, actions->ofpacts_len, &fp);
 
     ds_put_cstr(results, "\n");
 }

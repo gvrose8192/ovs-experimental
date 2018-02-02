@@ -129,6 +129,7 @@ Eziz Durdyyev                   ezizdurdy@gmail.com
 Flavio Fernandes                flavio@flaviof.com
 Flavio Leitner                  fbl@redhat.com
 Francesco Fusco                 ffusco@redhat.com
+Frode Nordahl                   frode.nordahl@gmail.com
 FUJITA Tomonori                 fujita.tomonori@lab.ntt.co.jp
 Gabe Beged-Dov                  gabe@begeddov.com
 Gaetano Catalli                 gaetano.catalli@gmail.com
@@ -178,6 +179,7 @@ Joe Stringer                    joe@ovn.org
 Jonathan Vestin                 jonavest@kau.se
 Jorge Arturo Sauma Vargas       jorge.sauma@hpe.com
 Jun Nakajima                    jun.nakajima@intel.com
+JunhanYan                       juyan@redhat.com
 JunoZhu                         zhunatuzi@gmail.com
 Justin Pettit                   jpettit@ovn.org
 Kaige Fu                        fukaige@huawei.com

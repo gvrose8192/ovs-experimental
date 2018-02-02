@@ -796,7 +796,7 @@ sbctl_dump_openflow(struct vconn *vconn, const struct uuid *uuid, bool stats)
 
             ds_clear(&s);
             if (stats) {
-                ofp_print_flow_stats(&s, fs, NULL, true);
+                ofp_print_flow_stats(&s, fs, NULL, NULL, true);
             } else {
                 ds_put_format(&s, "%stable=%s%"PRIu8" ",
                               colors.special, colors.end, fs->table_id);
@@ -806,7 +806,8 @@ sbctl_dump_openflow(struct vconn *vconn, const struct uuid *uuid, bool stats)
                 }
 
                 ds_put_format(&s, "%sactions=%s", colors.actions, colors.end);
-                ofpacts_format(fs->ofpacts, fs->ofpacts_len, NULL, &s);
+                struct ofpact_format_params fp = { .s = &s };
+                ofpacts_format(fs->ofpacts, fs->ofpacts_len, &fp);
             }
             printf("    %s\n", ds_cstr(&s));
         }
