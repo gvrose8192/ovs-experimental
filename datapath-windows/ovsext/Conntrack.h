@@ -99,6 +99,9 @@ typedef struct _NAT_ACTION_INFO {
 } NAT_ACTION_INFO, *PNAT_ACTION_INFO;
 
 typedef struct OVS_CT_ENTRY {
+    /* Reference to ovsCtBucketLock of ovsConntrackTable.*/
+    PNDIS_RW_LOCK_EX bucketLockRef;
+    PNDIS_RW_LOCK_EX lock;       /* Protects OVS_CT_ENTRY. */
     OVS_CT_KEY  key;
     OVS_CT_KEY  rev_key;
     UINT64      expiration;
@@ -228,8 +231,4 @@ NDIS_STATUS OvsCtHandleFtp(PNET_BUFFER_LIST curNbl,
                            BOOLEAN request);
 
 UINT32 OvsHashCtKey(const OVS_CT_KEY *key);
-BOOLEAN OvsCtKeyAreSame(OVS_CT_KEY ctxKey, OVS_CT_KEY entryKey);
-POVS_CT_ENTRY OvsCtLookup(OvsConntrackKeyLookupCtx *ctx);
-
-
 #endif /* __OVS_CONNTRACK_H_ */
