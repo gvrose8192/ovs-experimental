@@ -89,6 +89,7 @@ Damien Millescamps              damien.millescamps@6wind.com
 Dan Carpenter                   dan.carpenter@oracle.com
 Dan McGregor                    dan.mcgregor@usask.ca
 Dan Wendlandt                   dan@nicira.com
+Dan Williams                    dcbw@redhat.com
 Daniel Alvarez                  dalvarez@redhat.com
 Daniel Borkmann                 dborkman@redhat.com
 Daniel Hiltgen                  daniel@netkine.com
@@ -217,7 +218,7 @@ Marcin Mirecki                  mmirecki@redhat.com
 Mario Cabrera                   mario.cabrera@hpe.com
 Mark D. Gray                    mark.d.gray@intel.com
 Mark Hamilton                   mhamilton@nicira.com
-Mark Kavanagh                   mark.b.kavanagh@intel.com
+Mark Kavanagh                   mark.b.kavanagh81@gmail.com
 Mark Maglana                    mmaglana@gmail.com
 Mark Michelson                  mmichels@redhat.com
 Markos Chandras                 mchandras@suse.de
