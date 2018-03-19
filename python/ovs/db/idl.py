@@ -425,10 +425,11 @@ class Idl(object):
                         (table.name in self.readonly) and
                         (column not in self.readonly[table.name])):
                     columns.append(column)
-            monitor_requests[table.name] = {"columns": columns}
+            monitor_request = {"columns": columns}
             if method == "monitor_cond" and table.condition != [True]:
-                monitor_requests[table.name]["where"] = table.condition
+                monitor_request["where"] = table.condition
                 table.cond_change = False
+            monitor_requests[table.name] = [monitor_request]
 
         msg = ovs.jsonrpc.Message.create_request(
             method, [self._db.name, str(self.uuid), monitor_requests])
@@ -774,7 +775,11 @@ class Row(object):
         assert self._changes is not None
         assert self._mutations is not None
 
-        column = self._table.columns[column_name]
+        try:
+            column = self._table.columns[column_name]
+        except KeyError:
+            raise AttributeError("%s instance has no attribute '%s'" %
+                                 (self.__class__.__name__, column_name))
         datum = self._changes.get(column_name)
         inserts = None
         if '_inserts' in self._mutations.keys():

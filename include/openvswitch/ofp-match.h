@@ -24,16 +24,12 @@
 struct vl_mff_map;
 struct flow_wildcards;
 struct match;
+struct ofputil_port_map;
 struct tun_table;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* Converting OFPFW10_NW_SRC_MASK and OFPFW10_NW_DST_MASK wildcard bit counts
- * to and from IP bitmasks. */
-ovs_be32 ofputil_wcbits_to_netmask(int wcbits);
-int ofputil_netmask_to_wcbits(ovs_be32 netmask);
 
 /* Work with ofp10_match. */
 void ofputil_wildcard_from_ofpfw10(uint32_t ofpfw, struct flow_wildcards *);
@@ -42,6 +38,10 @@ void ofputil_match_from_ofp10_match(const struct ofp10_match *,
 void ofputil_normalize_match(struct match *);
 void ofputil_normalize_match_quiet(struct match *);
 void ofputil_match_to_ofp10_match(const struct match *, struct ofp10_match *);
+void ofp10_match_print(struct ds *, const struct ofp10_match *,
+                       const struct ofputil_port_map *, int verbosity);
+char *ofp10_match_to_string(const struct ofp10_match *,
+                            const struct ofputil_port_map *, int verbosity);
 
 /* Work with ofp11_match. */
 enum ofperr ofputil_pull_ofp11_match(struct ofpbuf *, const struct tun_table *,

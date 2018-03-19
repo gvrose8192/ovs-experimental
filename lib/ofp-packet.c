@@ -23,8 +23,10 @@
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/ofp-msgs.h"
 #include "openvswitch/ofp-parse.h"
+#include "openvswitch/ofp-print.h"
 #include "openvswitch/ofp-port.h"
 #include "openvswitch/ofp-prop.h"
+#include "openvswitch/ofp-table.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
 #include "util.h"
@@ -34,28 +36,15 @@ VLOG_DEFINE_THIS_MODULE(ofp_packet);
 
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
-bool
-ofputil_packet_in_format_is_valid(enum nx_packet_in_format packet_in_format)
-{
-    switch (packet_in_format) {
-    case NXPIF_STANDARD:
-    case NXPIF_NXT_PACKET_IN:
-    case NXPIF_NXT_PACKET_IN2:
-        return true;
-    }
-
-    return false;
-}
-
 const char *
-ofputil_packet_in_format_to_string(enum nx_packet_in_format packet_in_format)
+ofputil_packet_in_format_to_string(enum ofputil_packet_in_format format)
 {
-    switch (packet_in_format) {
-    case NXPIF_STANDARD:
+    switch (format) {
+    case OFPUTIL_PACKET_IN_STD:
         return "standard";
-    case NXPIF_NXT_PACKET_IN:
+    case OFPUTIL_PACKET_IN_NXT:
         return "nxt_packet_in";
-    case NXPIF_NXT_PACKET_IN2:
+    case OFPUTIL_PACKET_IN_NXT2:
         return "nxt_packet_in2";
     default:
         OVS_NOT_REACHED();
@@ -66,26 +55,47 @@ int
 ofputil_packet_in_format_from_string(const char *s)
 {
     return (!strcmp(s, "standard") || !strcmp(s, "openflow10")
-            ? NXPIF_STANDARD
+            ? OFPUTIL_PACKET_IN_STD
             : !strcmp(s, "nxt_packet_in") || !strcmp(s, "nxm")
-            ? NXPIF_NXT_PACKET_IN
+            ? OFPUTIL_PACKET_IN_NXT
             : !strcmp(s, "nxt_packet_in2")
-            ? NXPIF_NXT_PACKET_IN2
+            ? OFPUTIL_PACKET_IN_NXT2
             : -1);
 }
 
 struct ofpbuf *
-ofputil_make_set_packet_in_format(enum ofp_version ofp_version,
-                                  enum nx_packet_in_format packet_in_format)
+ofputil_encode_set_packet_in_format(enum ofp_version ofp_version,
+                                    enum ofputil_packet_in_format format)
 {
-    struct nx_set_packet_in_format *spif;
-    struct ofpbuf *msg;
-
-    msg = ofpraw_alloc(OFPRAW_NXT_SET_PACKET_IN_FORMAT, ofp_version, 0);
-    spif = ofpbuf_put_zeros(msg, sizeof *spif);
-    spif->format = htonl(packet_in_format);
+    struct ofpbuf *msg = ofpraw_alloc(OFPRAW_NXT_SET_PACKET_IN_FORMAT,
+                                      ofp_version, 0);
+    ovs_be32 *spif = ofpbuf_put_uninit(msg, sizeof *spif);
+    *spif = htonl(format);
 
     return msg;
+}
+
+enum ofperr
+ofputil_decode_set_packet_in_format(const struct ofp_header *oh,
+                                    enum ofputil_packet_in_format *format)
+{
+    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
+    ovs_assert(ofpraw_pull_assert(&b) == OFPRAW_NXT_SET_PACKET_IN_FORMAT);
+    ovs_be32 *spifp = ofpbuf_pull(&b, sizeof *spifp);
+    uint32_t spif = ntohl(*spifp);
+
+    switch (spif) {
+    case OFPUTIL_PACKET_IN_STD:
+    case OFPUTIL_PACKET_IN_NXT:
+    case OFPUTIL_PACKET_IN_NXT2:
+        *format = spif;
+        return 0;
+
+    default:
+        VLOG_WARN_RL(&rl, "NXT_SET_PACKET_IN_FORMAT message specified invalid "
+                     "packet-in format %"PRIu32, spif);
+        return OFPERR_OFPBRC_EPERM;
+    }
 }
 
 /* The caller has done basic initialization of '*pin'; the other output
@@ -619,7 +629,7 @@ ofputil_encode_ofp12_packet_in(const struct ofputil_packet_in *pin,
 }
 
 /* Converts abstract ofputil_packet_in_private 'pin' into a PACKET_IN message
- * for 'protocol', using the packet-in format specified by 'packet_in_format'.
+ * for 'protocol', using the packet-in format specified by 'format'.
  *
  * This function is really meant only for use by ovs-vswitchd.  To any other
  * code, the "continuation" data, i.e. the data that is in struct
@@ -632,13 +642,13 @@ ofputil_encode_ofp12_packet_in(const struct ofputil_packet_in *pin,
 struct ofpbuf *
 ofputil_encode_packet_in_private(const struct ofputil_packet_in_private *pin,
                                  enum ofputil_protocol protocol,
-                                 enum nx_packet_in_format packet_in_format)
+                                 enum ofputil_packet_in_format format)
 {
     enum ofp_version version = ofputil_protocol_to_ofp_version(protocol);
 
     struct ofpbuf *msg;
-    switch (packet_in_format) {
-    case NXPIF_STANDARD:
+    switch (format) {
+    case OFPUTIL_PACKET_IN_STD:
         switch (protocol) {
         case OFPUTIL_P_OF10_STD:
         case OFPUTIL_P_OF10_STD_TID:
@@ -664,11 +674,11 @@ ofputil_encode_packet_in_private(const struct ofputil_packet_in_private *pin,
         }
         break;
 
-    case NXPIF_NXT_PACKET_IN:
+    case OFPUTIL_PACKET_IN_NXT:
         msg = ofputil_encode_nx_packet_in(&pin->base, version);
         break;
 
-    case NXPIF_NXT_PACKET_IN2:
+    case OFPUTIL_PACKET_IN_NXT2:
         return ofputil_encode_nx_packet_in2(pin, version,
                                             pin->base.packet_len);
 
@@ -887,6 +897,130 @@ ofputil_decode_packet_in_private(const struct ofp_header *oh, bool loose,
     return error;
 }
 
+static void
+format_hex_arg(struct ds *s, const uint8_t *data, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        if (i) {
+            ds_put_char(s, '.');
+        }
+        ds_put_format(s, "%02"PRIx8, data[i]);
+    }
+}
+
+void
+ofputil_packet_in_private_format(struct ds *s,
+                                 const struct ofputil_packet_in_private *pin,
+                                 size_t total_len, uint32_t buffer_id,
+                                 const struct ofputil_port_map *port_map,
+                                 const struct ofputil_table_map *table_map,
+                                 int verbosity)
+{
+    char reasonbuf[OFPUTIL_PACKET_IN_REASON_BUFSIZE];
+    const struct ofputil_packet_in *public = &pin->base;
+
+    if (public->table_id
+        || ofputil_table_map_get_name(table_map, public->table_id)) {
+        ds_put_format(s, " table_id=");
+        ofputil_format_table(public->table_id, table_map, s);
+    }
+
+    if (public->cookie != OVS_BE64_MAX) {
+        ds_put_format(s, " cookie=0x%"PRIx64, ntohll(public->cookie));
+    }
+
+    ds_put_format(s, " total_len=%"PRIuSIZE" ", total_len);
+
+    match_format(&public->flow_metadata, port_map, s, OFP_DEFAULT_PRIORITY);
+
+    ds_put_format(s, " (via %s)",
+                  ofputil_packet_in_reason_to_string(public->reason,
+                                                     reasonbuf,
+                                                     sizeof reasonbuf));
+
+    ds_put_format(s, " data_len=%"PRIuSIZE, public->packet_len);
+    if (buffer_id == UINT32_MAX) {
+        ds_put_format(s, " (unbuffered)");
+        if (total_len != public->packet_len) {
+            ds_put_format(s, " (***total_len != data_len***)");
+        }
+    } else {
+        ds_put_format(s, " buffer=0x%08"PRIx32, buffer_id);
+        if (total_len < public->packet_len) {
+            ds_put_format(s, " (***total_len < data_len***)");
+        }
+    }
+    ds_put_char(s, '\n');
+
+    if (public->userdata_len) {
+        ds_put_cstr(s, " userdata=");
+        format_hex_arg(s, pin->base.userdata, pin->base.userdata_len);
+        ds_put_char(s, '\n');
+    }
+
+    if (!uuid_is_zero(&pin->bridge)) {
+        ds_put_format(s, " continuation.bridge="UUID_FMT"\n",
+                      UUID_ARGS(&pin->bridge));
+    }
+
+    if (pin->stack_size) {
+        ds_put_cstr(s, " continuation.stack=(top)");
+
+        struct ofpbuf pin_stack;
+        ofpbuf_use_const(&pin_stack, pin->stack, pin->stack_size);
+
+        while (pin_stack.size) {
+            uint8_t len;
+            uint8_t *val = nx_stack_pop(&pin_stack, &len);
+            union mf_subvalue value;
+
+            ds_put_char(s, ' ');
+            memset(&value, 0, sizeof value - len);
+            memcpy(&value.u8[sizeof value - len], val, len);
+            mf_subvalue_format(&value, s);
+        }
+        ds_put_cstr(s, " (bottom)\n");
+    }
+
+    if (pin->mirrors) {
+        ds_put_format(s, " continuation.mirrors=0x%"PRIx32"\n",
+                      pin->mirrors);
+    }
+
+    if (pin->conntracked) {
+        ds_put_cstr(s, " continuation.conntracked=true\n");
+    }
+
+    struct ofpact_format_params fp = {
+        .port_map = port_map,
+        .table_map = table_map,
+        .s = s,
+    };
+
+    if (pin->actions_len) {
+        ds_put_cstr(s, " continuation.actions=");
+        ofpacts_format(pin->actions, pin->actions_len, &fp);
+        ds_put_char(s, '\n');
+    }
+
+    if (pin->action_set_len) {
+        ds_put_cstr(s, " continuation.action_set=");
+        ofpacts_format(pin->action_set, pin->action_set_len, &fp);
+        ds_put_char(s, '\n');
+    }
+
+    if (verbosity > 0) {
+        char *packet = ofp_packet_to_string(
+            public->packet, public->packet_len,
+            public->flow_metadata.flow.packet_type);
+        ds_put_cstr(s, packet);
+        free(packet);
+    }
+    if (verbosity > 2) {
+        ds_put_hex_dump(s, public->packet, public->packet_len, 0, false);
+    }
+}
+
 /* Frees data in 'pin' that is dynamically allocated by
  * ofputil_decode_packet_in_private().
  *
@@ -1086,6 +1220,41 @@ ofputil_encode_packet_out(const struct ofputil_packet_out *po,
     ofpmsg_update_length(msg);
 
     return msg;
+}
+
+void
+ofputil_packet_out_format(struct ds *s, const struct ofputil_packet_out *po,
+                          const struct ofputil_port_map *port_map,
+                          const struct ofputil_table_map *table_map,
+                          int verbosity)
+{
+    ds_put_char(s, ' ');
+    match_format(&po->flow_metadata, port_map, s, OFP_DEFAULT_PRIORITY);
+
+    ds_put_cstr(s, " actions=");
+    struct ofpact_format_params fp = {
+        .port_map = port_map,
+        .table_map = table_map,
+        .s = s,
+    };
+    ofpacts_format(po->ofpacts, po->ofpacts_len, &fp);
+
+    if (po->buffer_id == UINT32_MAX) {
+        ds_put_format(s, " data_len=%"PRIuSIZE, po->packet_len);
+        if (verbosity > 0 && po->packet_len > 0) {
+            ovs_be32 po_packet_type = po->flow_metadata.flow.packet_type;
+            char *packet = ofp_packet_to_string(po->packet, po->packet_len,
+                                                po_packet_type);
+            ds_put_char(s, '\n');
+            ds_put_cstr(s, packet);
+            free(packet);
+        }
+        if (verbosity > 2) {
+            ds_put_hex_dump(s, po->packet, po->packet_len, 0, false);
+        }
+    } else {
+        ds_put_format(s, " buffer=0x%08"PRIx32, po->buffer_id);
+    }
 }
 
 /* Parse a string representation of a OFPT_PACKET_OUT to '*po'.  If successful,

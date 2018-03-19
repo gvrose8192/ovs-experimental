@@ -926,9 +926,9 @@ ofctl_dump_table_features(struct ovs_cmdl_context *ctx)
                     }
 
                     struct ds s = DS_EMPTY_INITIALIZER;
-                    ofp_print_table_features(&s, &tf, n ? &prev : NULL,
-                                             NULL, NULL,
-                                             tables_to_show(ctx->argv[1]));
+                    ofputil_table_features_format(
+                        &s, &tf, n ? &prev : NULL, NULL, NULL,
+                        tables_to_show(ctx->argv[1]));
                     puts(ds_cstr(&s));
                     ds_destroy(&s);
 
@@ -1571,8 +1571,10 @@ ofctl_dump_flows(struct ovs_cmdl_context *ctx)
         struct ds s = DS_EMPTY_INITIALIZER;
         for (size_t i = 0; i < n_fses; i++) {
             ds_clear(&s);
-            ofp_print_flow_stats(&s, &fses[i], ports_to_show(ctx->argv[1]),
-                                 tables_to_show(ctx->argv[1]), show_stats);
+            ofputil_flow_stats_format(&s, &fses[i],
+                                      ports_to_show(ctx->argv[1]),
+                                      tables_to_show(ctx->argv[1]),
+                                      show_stats);
             printf(" %s\n", ds_cstr(&s));
         }
         ds_destroy(&s);
@@ -1820,13 +1822,13 @@ ofctl_del_flows(struct ovs_cmdl_context *ctx)
 
 static bool
 set_packet_in_format(struct vconn *vconn,
-                     enum nx_packet_in_format packet_in_format,
+                     enum ofputil_packet_in_format packet_in_format,
                      bool must_succeed)
 {
     struct ofpbuf *spif;
 
-    spif = ofputil_make_set_packet_in_format(vconn_get_version(vconn),
-                                             packet_in_format);
+    spif = ofputil_encode_set_packet_in_format(vconn_get_version(vconn),
+                                               packet_in_format);
     if (must_succeed) {
         transact_noreply(vconn, spif);
     } else {
@@ -2303,13 +2305,13 @@ ofctl_monitor(struct ovs_cmdl_context *ctx)
         set_packet_in_format(vconn, preferred_packet_in_format, true);
     } else {
         /* Otherwise, we always prefer NXT_PACKET_IN2. */
-        if (!set_packet_in_format(vconn, NXPIF_NXT_PACKET_IN2, false)) {
+        if (!set_packet_in_format(vconn, OFPUTIL_PACKET_IN_NXT2, false)) {
             /* We can't get NXT_PACKET_IN2.  For OpenFlow 1.0 only, request
              * NXT_PACKET_IN.  (Before 2.6, Open vSwitch will accept a request
              * for NXT_PACKET_IN with OF1.1+, but even after that it still
              * sends packet-ins in the OpenFlow native format.) */
             if (vconn_get_version(vconn) == OFP10_VERSION) {
-                set_packet_in_format(vconn, NXPIF_NXT_PACKET_IN, false);
+                set_packet_in_format(vconn, OFPUTIL_PACKET_IN_NXT, false);
             }
         }
     }
