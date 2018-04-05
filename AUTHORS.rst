@@ -130,6 +130,7 @@ Eziz Durdyyev                   ezizdurdy@gmail.com
 Flavio Fernandes                flavio@flaviof.com
 Flavio Leitner                  fbl@redhat.com
 Francesco Fusco                 ffusco@redhat.com
+Frédéric Tobias Christ          fchrist@live.de
 Frode Nordahl                   frode.nordahl@gmail.com
 FUJITA Tomonori                 fujita.tomonori@lab.ntt.co.jp
 Gabe Beged-Dov                  gabe@begeddov.com
@@ -361,6 +362,7 @@ Zang MingJie                    zealot0630@gmail.com
 Zhenyu Gao                      sysugaozhenyu@gmail.com
 ZhiPeng Lu                      lu.zhipeng@zte.com.cn
 Zhou Yangchao                   1028519445@qq.com
+aginwala                        amginwal@gmail.com
 wenxu                           wenxu@ucloud.cn
 wisd0me                         ak47izatool@gmail.com
 xushengping                     shengping.xu@huawei.com
@@ -506,6 +508,7 @@ Marvin Pascual                  marvin@pascual.com.ph
 Maxime Brun                     m.brun@alphalink.fr
 Madhu Venugopal                 mavenugo@gmail.com
 Michael A. Collins              mike.a.collins@ark-net.org
+Michael Ben-Ami                 mbenami@digitalocean.com
 Michael Hu                      mhu@nicira.com
 Michael J. Smalley              michaeljsmalley@gmail.com
 Michael Mao                     mmao@nicira.com

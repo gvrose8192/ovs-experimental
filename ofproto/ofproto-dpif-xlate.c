@@ -5019,7 +5019,9 @@ xlate_learn_action(struct xlate_ctx *ctx, const struct ofpact_learn *learn)
         if (OVS_UNLIKELY(ctx->xin->trace)) {
             struct ds s = DS_EMPTY_INITIALIZER;
             ds_put_format(&s, "table=%"PRIu8" ", fm.table_id);
-            match_format(&fm.match, NULL, &s, OFP_DEFAULT_PRIORITY);
+            minimatch_format(&fm.match,
+                             ofproto_get_tun_tab(&ctx->xin->ofproto->up),
+                             NULL, &s, OFP_DEFAULT_PRIORITY);
             ds_chomp(&s, ' ');
             ds_put_format(&s, " priority=%d", fm.priority);
             if (fm.new_cookie) {
@@ -5090,6 +5092,8 @@ xlate_learn_action(struct xlate_ctx *ctx, const struct ofpact_learn *learn)
             xlate_report_error(ctx, "LEARN action execution failed (%s).",
                                ofperr_to_string(error));
         }
+
+        minimatch_destroy(&fm.match);
     } else {
         xlate_report(ctx, OFT_WARN,
                      "suppressing side effects, so learn action ignored");
@@ -5750,6 +5754,8 @@ compose_conntrack_action(struct xlate_ctx *ctx, struct ofpact_conntrack *ofc,
     /* The ct_* fields are only available in the scope of the 'recirc_table'
      * call chain. */
     flow_clear_conntrack(&ctx->xin->flow);
+    xlate_report(ctx, OFT_DETAIL, "Sets the packet to an untracked state, "
+                 "and clears all the conntrack fields.");
     ctx->conntracked = false;
 }
 

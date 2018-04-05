@@ -866,9 +866,11 @@
       Deletes the configured connection(s).
       </dd>
 
-      <dt><code>set-connection</code> <var>target</var>...</dt>
+      <dt>[<code>--inactivity-probe=</code><var>msecs</var>] <code>set-connection</code> <var>target</var>...</dt>
       <dd>
-      Sets the configured manager target or targets.
+        Sets the configured manager target or targets.  Use
+        <code>--inactivity-probe=</code><var>msecs</var> to override the default
+        idle connection inactivity probe time.  Use 0 to disable inactivity probes.
       </dd>
     </dl>
 
@@ -943,6 +945,21 @@
       Otherwise, the default is <code>unix:@RUNDIR@/ovnnb_db.sock</code>, but this
       default is unlikely to be useful outside of single-machine OVN test
       environments.
+    </dd>
+
+    <dt><code>--leader-only</code></dt>
+    <dt><code>--no-leader-only</code></dt>
+    <dd>
+      By default, or with <code>--leader-only</code>, when the database server
+      is a clustered database, <code>ovn-nbctl</code> will avoid servers other
+      than the cluster leader.  This ensures that any data that
+      <code>ovn-nbctl</code> reads and reports is up-to-date.  With
+      <code>--no-leader-only</code>, <code>ovn-nbctl</code> will use any server
+      in the cluster, which means that for read-only transactions it can report
+      and act on stale data (transactions that modify the database are always
+      serialized even with <code>--no-leader-only</code>).  Refer to
+      <code>Understanding Cluster Consistency</code> in <code>ovsdb</code>(7)
+      for more information.
     </dd>
     </dl>
 

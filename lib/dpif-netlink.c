@@ -45,6 +45,7 @@
 #include "netlink-notifier.h"
 #include "netlink-socket.h"
 #include "netlink.h"
+#include "netnsid.h"
 #include "odp-util.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/flow.h"
@@ -1288,7 +1289,7 @@ dpif_netlink_port_poll(const struct dpif *dpif_, char **devnamep)
         int error;
 
         ofpbuf_use_stub(&buf, buf_stub, sizeof buf_stub);
-        error = nl_sock_recv(dpif->port_notifier, &buf, false);
+        error = nl_sock_recv(dpif->port_notifier, &buf, NULL, false);
         if (!error) {
             struct dpif_netlink_vport vport;
 
@@ -2622,7 +2623,7 @@ dpif_netlink_recv_windows(struct dpif_netlink *dpif, uint32_t handler_id,
                 return EAGAIN;
             }
 
-            error = nl_sock_recv(sock_pool[i].nl_sock, buf, false);
+            error = nl_sock_recv(sock_pool[i].nl_sock, buf, NULL, false);
             if (error == ENOBUFS) {
                 /* ENOBUFS typically means that we've received so many
                  * packets that the buffer overflowed.  Try again
@@ -2697,7 +2698,7 @@ dpif_netlink_recv__(struct dpif_netlink *dpif, uint32_t handler_id,
                 return EAGAIN;
             }
 
-            error = nl_sock_recv(ch->sock, buf, false);
+            error = nl_sock_recv(ch->sock, buf, NULL, false);
             if (error == ENOBUFS) {
                 /* ENOBUFS typically means that we've received so many
                  * packets that the buffer overflowed.  Try again
@@ -3009,7 +3010,7 @@ dpif_netlink_init(void)
         error = nl_lookup_genl_family(OVS_DATAPATH_FAMILY,
                                       &ovs_datapath_family);
         if (error) {
-            VLOG_WARN("Generic Netlink family '%s' does not exist. "
+            VLOG_INFO("Generic Netlink family '%s' does not exist. "
                       "The Open vSwitch kernel module is probably not loaded.",
                       OVS_DATAPATH_FAMILY);
         }
@@ -3072,6 +3073,7 @@ dpif_netlink_vport_from_ofpbuf(struct dpif_netlink_vport *vport,
         [OVS_VPORT_ATTR_STATS] = { NL_POLICY_FOR(struct ovs_vport_stats),
                                    .optional = true },
         [OVS_VPORT_ATTR_OPTIONS] = { .type = NL_A_NESTED, .optional = true },
+        [OVS_VPORT_ATTR_NETNSID] = { .type = NL_A_U32, .optional = true },
     };
 
     dpif_netlink_vport_init(vport);
@@ -3106,6 +3108,12 @@ dpif_netlink_vport_from_ofpbuf(struct dpif_netlink_vport *vport,
     if (a[OVS_VPORT_ATTR_OPTIONS]) {
         vport->options = nl_attr_get(a[OVS_VPORT_ATTR_OPTIONS]);
         vport->options_len = nl_attr_get_size(a[OVS_VPORT_ATTR_OPTIONS]);
+    }
+    if (a[OVS_VPORT_ATTR_NETNSID]) {
+        netnsid_set(&vport->netnsid,
+                    nl_attr_get_u32(a[OVS_VPORT_ATTR_NETNSID]));
+    } else {
+        netnsid_set_local(&vport->netnsid);
     }
     return 0;
 }

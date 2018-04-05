@@ -81,6 +81,9 @@ static struct ovsdb_idl *the_idl;
 static struct ovsdb_idl_txn *the_idl_txn;
 OVS_NO_RETURN static void sbctl_exit(int status);
 
+/* --leader-only, --no-leader-only: Only accept the leader in a cluster. */
+static int leader_only = true;
+
 static void sbctl_cmd_init(void);
 OVS_NO_RETURN static void usage(void);
 static void parse_options(int argc, char *argv[], struct shash *local_options);
@@ -121,7 +124,8 @@ main(int argc, char *argv[])
     }
 
     /* Initialize IDL. */
-    idl = the_idl = ovsdb_idl_create(db, &sbrec_idl_class, false, false);
+    idl = the_idl = ovsdb_idl_create(db, &sbrec_idl_class, false, true);
+    ovsdb_idl_set_leader_only(idl, leader_only);
     run_prerequisites(commands, n_commands, idl);
 
     /* Execute the commands.
@@ -179,6 +183,8 @@ parse_options(int argc, char *argv[], struct shash *local_options)
         {"help", no_argument, NULL, 'h'},
         {"commands", no_argument, NULL, OPT_COMMANDS},
         {"options", no_argument, NULL, OPT_OPTIONS},
+        {"leader-only", no_argument, &leader_only, true},
+        {"no-leader-only", no_argument, &leader_only, false},
         {"version", no_argument, NULL, 'V'},
         VLOG_LONG_OPTIONS,
         STREAM_SSL_LONG_OPTIONS,
@@ -274,6 +280,9 @@ parse_options(int argc, char *argv[], struct shash *local_options)
 
         default:
             abort();
+
+        case 0:
+            break;
         }
     }
     free(short_options);
@@ -317,6 +326,7 @@ Logical flow commands:\n\
 Connection commands:\n\
   get-connection             print the connections\n\
   del-connection             delete the connections\n\
+  [--inactivity-probe=MSECS]\n\
   set-connection TARGET...   set the list of connections to TARGET...\n\
 \n\
 SSL commands:\n\
@@ -331,6 +341,7 @@ set the SSL configuration\n\
 Options:\n\
   --db=DATABASE               connect to DATABASE\n\
                               (default: %s)\n\
+  --no-leader-only            accept any cluster member, not just the leader\n\
   -t, --timeout=SECS          wait at most SECS seconds\n\
   --dry-run                   do not commit changes to database\n\
   --oneline                   print exactly one line of output per command\n",
@@ -954,6 +965,7 @@ pre_connection(struct ctl_context *ctx)
     ovsdb_idl_add_column(ctx->idl, &sbrec_connection_col_target);
     ovsdb_idl_add_column(ctx->idl, &sbrec_connection_col_read_only);
     ovsdb_idl_add_column(ctx->idl, &sbrec_connection_col_role);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_connection_col_inactivity_probe);
 }
 
 static void
@@ -1016,6 +1028,8 @@ insert_connections(struct ctl_context *ctx, char *targets[], size_t n)
     size_t i, conns=0;
     bool read_only = false;
     char *role = "";
+    const char *inactivity_probe = shash_find_data(&ctx->options,
+                                                   "--inactivity-probe");
 
     /* Insert each connection in a new row in Connection table. */
     connections = xmalloc(n * sizeof *connections);
@@ -1038,6 +1052,11 @@ insert_connections(struct ctl_context *ctx, char *targets[], size_t n)
         sbrec_connection_set_target(connections[conns], targets[i]);
         sbrec_connection_set_read_only(connections[conns], read_only);
         sbrec_connection_set_role(connections[conns], role);
+        if (inactivity_probe) {
+            int64_t msecs = atoll(inactivity_probe);
+            sbrec_connection_set_inactivity_probe(connections[conns],
+                                                  &msecs, 1);
+        }
         conns++;
     }
 
@@ -1427,7 +1446,7 @@ static const struct ctl_command_syntax sbctl_commands[] = {
     {"get-connection", 0, 0, "", pre_connection, cmd_get_connection, NULL, "", RO},
     {"del-connection", 0, 0, "", pre_connection, cmd_del_connection, NULL, "", RW},
     {"set-connection", 1, INT_MAX, "TARGET...", pre_connection, cmd_set_connection,
-     NULL, "", RW},
+     NULL, "--inactivity-probe=", RW},
 
     /* SSL commands. */
     {"get-ssl", 0, 0, "", pre_cmd_get_ssl, cmd_get_ssl, NULL, "", RO},

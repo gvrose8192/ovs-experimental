@@ -293,11 +293,17 @@ tnlid_in_use(const struct hmap *set, uint32_t tnlid)
 }
 
 static uint32_t
+next_tnlid(uint32_t tnlid, uint32_t max)
+{
+    return tnlid + 1 <= max ? tnlid + 1 : 1;
+}
+
+static uint32_t
 allocate_tnlid(struct hmap *set, const char *name, uint32_t max,
                uint32_t *hint)
 {
-    for (uint32_t tnlid = *hint + 1; tnlid != *hint;
-         tnlid = tnlid + 1 <= max ? tnlid + 1 : 1) {
+    for (uint32_t tnlid = next_tnlid(*hint, max); tnlid != *hint;
+         tnlid = next_tnlid(tnlid, max)) {
         if (!tnlid_in_use(set, tnlid)) {
             add_tnlid(set, tnlid);
             *hint = tnlid;
@@ -2905,9 +2911,11 @@ build_pre_acls(struct ovn_datapath *od, struct hmap *lflows)
          * Not to do conntrack on ND and ICMP destination
          * unreachable packets. */
         ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
-                      "nd || nd_rs || nd_ra || icmp4.type == 3", "next;");
+                      "nd || nd_rs || nd_ra || icmp4.type == 3 || "
+                      "(tcp && tcp.flags == 4)", "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
-                      "nd || nd_rs || nd_ra || icmp4.type == 3", "next;");
+                      "nd || nd_rs || nd_ra || icmp4.type == 3 || "
+                      "(tcp && tcp.flags == 4)", "next;");
 
         /* Ingress and Egress Pre-ACL Table (Priority 100).
          *
@@ -3097,14 +3105,30 @@ build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
     struct ds actions = DS_EMPTY_INITIALIZER;
     bool ingress = (stage == S_SWITCH_IN_ACL);
 
-    /* XXX: Treat TCP connections as "drop;" for now */
+    /* TCP */
     build_acl_log(&actions, acl);
     if (extra_match->length > 0) {
         ds_put_format(&match, "(%s) && ", extra_match->string);
     }
-    ds_put_format(&match, "ip && tcp && (%s)", acl->match);
-    ds_put_cstr(&actions, "/* drop */");
-    ovn_lflow_add(lflows, od, stage, acl->priority + OVN_ACL_PRI_OFFSET,
+    ds_put_format(&match, "ip4 && tcp && (%s)", acl->match);
+    ds_put_format(&actions, "reg0 = 0; "
+                  "eth.dst <-> eth.src; ip4.dst <-> ip4.src; "
+                  "tcp_reset { outport <-> inport; %s };",
+                  ingress ? "output;" : "next(pipeline=ingress,table=0);");
+    ovn_lflow_add(lflows, od, stage, acl->priority + OVN_ACL_PRI_OFFSET + 10,
+                  ds_cstr(&match), ds_cstr(&actions));
+    ds_clear(&match);
+    ds_clear(&actions);
+    build_acl_log(&actions, acl);
+    if (extra_match->length > 0) {
+        ds_put_format(&match, "(%s) && ", extra_match->string);
+    }
+    ds_put_format(&match, "ip6 && tcp && (%s)", acl->match);
+    ds_put_format(&actions, "reg0 = 0; "
+                  "eth.dst <-> eth.src; ip6.dst <-> ip6.src; "
+                  "tcp_reset { outport <-> inport; %s };",
+                  ingress ? "output;" : "next(pipeline=ingress,table=0);");
+    ovn_lflow_add(lflows, od, stage, acl->priority + OVN_ACL_PRI_OFFSET + 10,
                   ds_cstr(&match), ds_cstr(&actions));
 
     /* IPv4 traffic */
