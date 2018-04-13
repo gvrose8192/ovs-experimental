@@ -304,6 +304,7 @@ inport = "eth0" => Syntax error at `=' expecting relational operator.
 123 == 123 => Syntax error at `123' expecting field name.
 
 $name => Syntax error at `$name' expecting address set name.
+@name => Syntax error at `@name' expecting port group name.
 
 123 == xyzzy => Syntax error at `xyzzy' expecting field name.
 xyzzy == 1 => Syntax error at `xyzzy' expecting field name.
@@ -654,6 +655,24 @@ ip,nw_src=32.0.0.0/32.0.0.0
 ip,nw_src=4.0.0.0/4.0.0.0
 ip,nw_src=64.0.0.0/64.0.0.0
 ip,nw_src=8.0.0.0/8.0.0.0
+])
+AT_CLEANUP
+
+AT_SETUP([ovn -- converting expressions to flows -- port groups])
+AT_KEYWORDS([expression])
+expr_to_flow () {
+    echo "$1" | ovstest test-ovn expr-to-flows | sort
+}
+AT_CHECK([expr_to_flow 'outport == @pg1'], [0], [dnl
+reg15=0x11
+reg15=0x12
+reg15=0x13
+])
+AT_CHECK([expr_to_flow 'outport == {@pg_empty}'], [0], [dnl
+(no flows)
+])
+AT_CHECK([expr_to_flow 'outport == {"lsp1", @pg_empty}'], [0], [dnl
+reg15=0x11
 ])
 AT_CLEANUP
 
@@ -1135,6 +1154,16 @@ icmp4 { };
     encodes as controller(userdata=00.00.00.0a.00.00.00.00)
     has prereqs ip4
 
+# icmp6
+icmp6 { eth.dst = ff:ff:ff:ff:ff:ff; output; }; output;
+    encodes as controller(userdata=00.00.00.0a.00.00.00.00.00.19.00.10.80.00.06.06.ff.ff.ff.ff.ff.ff.00.00.ff.ff.00.10.00.00.23.20.00.0e.ff.f8.40.00.00.00),resubmit(,64)
+    has prereqs ip6
+
+icmp6 { };
+    formats as icmp6 { drop; };
+    encodes as controller(userdata=00.00.00.0a.00.00.00.00)
+    has prereqs ip6
+
 # tcp_reset
 tcp_reset { eth.dst = ff:ff:ff:ff:ff:ff; output; }; output;
     encodes as controller(userdata=00.00.00.0b.00.00.00.00.00.19.00.10.80.00.06.06.ff.ff.ff.ff.ff.ff.00.00.ff.ff.00.10.00.00.23.20.00.0e.ff.f8.40.00.00.00),resubmit(,64)
@@ -1213,6 +1242,13 @@ ovn-nbctl acl-add lsw0 from-lport 1000 'eth.type == 0x1235 && inport == "lp11"' 
 ovn-nbctl acl-add lsw0 to-lport 1000 'eth.type == 0x1236 && outport == "lp33"' drop
 ovn-nbctl create Address_Set name=set1 addresses=\"f0:00:00:00:00:11\",\"f0:00:00:00:00:21\",\"f0:00:00:00:00:31\"
 ovn-nbctl acl-add lsw0 to-lport 1000 'eth.type == 0x1237 && eth.src == $set1 && outport == "lp33"' drop
+
+get_lsp_uuid () {
+    ovn-nbctl lsp-list lsw0 | grep $1 | awk '{ print $1 }'
+}
+
+ovn-nbctl create Port_Group name=pg1 ports=`get_lsp_uuid lp22`,`get_lsp_uuid lp33`
+ovn-nbctl acl-add lsw0 to-lport 1000 'eth.type == 0x1238 && outport == @pg1' drop
 
 # Pre-populate the hypervisors' ARP tables so that we don't lose any
 # packets for ARP resolution (native tunneling doesn't queue packets
@@ -1354,10 +1390,18 @@ for is in 1 2 3; do
                 else
                     acl4=$d
                 fi
+                if test $d = $s || test $d = 22 || test $d = 33; then
+                    # dest of 22 and 33 should be dropped
+                    # due to the 5th ACL that uses port_group(pg1).
+                    acl5=
+                else
+                    acl5=$d
+                fi
                 test_packet $s f000000000$d f000000000$s 1234        #7, acl1
                 test_packet $s f000000000$d f000000000$s 1235 $acl2  #7, acl2
                 test_packet $s f000000000$d f000000000$s 1236 $acl3  #7, acl3
                 test_packet $s f000000000$d f000000000$s 1237 $acl4  #7, acl4
+                test_packet $s f000000000$d f000000000$s 1238 $acl5  #7, acl5
 
                 test_packet $s f000000000$d f00000000055 810000091234      #4
                 test_packet $s f000000000$d 0100000000$s $s$d              #5
@@ -9138,13 +9182,15 @@ sim_add hv1
 as hv1
 ovs-vsctl add-br br-phys
 ovn_attach n1 br-phys 192.168.0.11
-ovs-vsctl -- add-port br-int hv1-vif0
+ovs-vsctl -- add-port br-int hv1-vif0 -- \
+set Interface hv1-vif0 ofport-request=1
 
 sim_add hv2
 as hv2
 ovs-vsctl add-br br-phys
 ovn_attach n1 br-phys 192.168.0.12
-ovs-vsctl -- add-port br-int hv2-vif0
+ovs-vsctl -- add-port br-int hv2-vif0 -- \
+set Interface hv2-vif0 ofport-request=1
 
 # Allow only chassis hv1 to bind logical port lsp0.
 ovn-nbctl lsp-set-options lsp0 requested-chassis=hv1
@@ -9164,7 +9210,11 @@ ovs-vsctl set interface hv2-vif0 external-ids:iface-id=lsp0
 OVS_WAIT_UNTIL([test 1 = $(grep -c "Not claiming lport lsp0" hv2/ovn-controller.log)])
 AT_CHECK([test x$(ovn-sbctl --bare --columns chassis find port_binding logical_port=lsp0) = x], [0], [])
 
-# (2) Chassis hv1 should bind lsp0 when physical to logical mapping exists on hv1.
+# (2) Chassis hv2 should not add flows in OFTABLE_PHY_TO_LOG and OFTABLE_LOG_TO_PHY tables.
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [1], [])
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=65 | grep output], [1], [])
+
+# (3) Chassis hv1 should bind lsp0 when physical to logical mapping exists on hv1.
 echo "verifying that hv1 binds lsp0 when hv1 physical/logical mapping is added"
 as hv1
 ovs-vsctl set interface hv1-vif0 external-ids:iface-id=lsp0
@@ -9172,13 +9222,25 @@ ovs-vsctl set interface hv1-vif0 external-ids:iface-id=lsp0
 OVS_WAIT_UNTIL([test 1 = $(grep -c "Claiming lport lsp0" hv1/ovn-controller.log)])
 AT_CHECK([test $(ovn-sbctl --bare --columns chassis find port_binding logical_port=lsp0) = "$hv1_uuid"], [0], [])
 
-# (3) Chassis hv1 should release lsp0 binding and chassis hv2 should bind lsp0 when
+# (4) Chassis hv1 should add flows in OFTABLE_PHY_TO_LOG and OFTABLE_LOG_TO_PHY tables.
+as hv1 ovs-ofctl dump-flows br-int
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [0], [ignore])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], [0], [ignore])
+
+# (5) Chassis hv1 should release lsp0 binding and chassis hv2 should bind lsp0 when
 # the requested chassis for lsp0 is changed from hv1 to hv2.
 echo "verifying that lsp0 binding moves when requested-chassis is changed"
 
 ovn-nbctl lsp-set-options lsp0 requested-chassis=hv2
 OVS_WAIT_UNTIL([test 1 = $(grep -c "Releasing lport lsp0 from this chassis" hv1/ovn-controller.log)])
 OVS_WAIT_UNTIL([test $(ovn-sbctl --bare --columns chassis find port_binding logical_port=lsp0) = "$hv2_uuid"])
+
+# (6) Chassis hv2 should add flows and hv1 should not.
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [0], [ignore])
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], [0], [ignore])
+
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [1], [])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep output], [1], [])
 
 OVN_CLEANUP([hv1],[hv2])
 
@@ -9196,7 +9258,7 @@ sim_add hv1
 as hv1
 ovs-vsctl add-br br-phys
 ovn_attach n1 br-phys 192.168.0.11
-ovs-vsctl -- add-port br-int hv1-vif0
+ovs-vsctl -- add-port br-int hv1-vif0 -- set Interface hv1-vif0 ofport-request=1
 
 hv1_hostname=$(ovn-sbctl --bare --columns hostname find Chassis name=hv1)
 echo "hv1_hostname=${hv1_hostname}"
@@ -9207,11 +9269,15 @@ hv1_uuid=$(ovn-sbctl --bare --columns _uuid find Chassis name=hv1)
 echo "hv1_uuid=${hv1_uuid}"
 OVS_WAIT_UNTIL([test 1 = $(grep -c "Claiming lport lsp0" hv1/ovn-controller.log)])
 AT_CHECK([test x$(ovn-sbctl --bare --columns chassis find port_binding logical_port=lsp0) = x"$hv1_uuid"], [0], [])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [0], [ignore])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], [0], [ignore])
 
 ovn-nbctl --wait=hv --timeout=3 lsp-set-options lsp0 requested-chassis=non-existant-chassis
 OVS_WAIT_UNTIL([test 1 = $(grep -c "Releasing lport lsp0 from this chassis" hv1/ovn-controller.log)])
 ovn-nbctl --wait=hv --timeout=3 sync
 AT_CHECK([test x$(ovn-sbctl --bare --columns chassis find port_binding logical_port=lsp0) = x], [0], [])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [1], [])
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep output], [1], [])
 
 OVN_CLEANUP([hv1])
 
@@ -9402,6 +9468,24 @@ test_ip_packet() {
     as hv$hv ovs-appctl netdev-dummy/receive vif$inport $packet
 }
 
+# test_ipv6_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST EXP_ICMP_CHKSUM
+#
+# Causes a packet to be received on INPORT of the hypervisor HV. The packet is an IPv6 packet with
+# ETH_SRC, ETH_DST, IPV6_SRC, IPV6_DST as specified.
+# EXP_ICMP_CHKSUM is the icmp6 checksums of the icmp6 destination unreachable frame generated from ACL rule hit
+test_ipv6_packet() {
+    local inport=$1 hv=$2 eth_src=$3 eth_dst=$4 ipv6_src=$5 ipv6_dst=$6 exp_icmp_chksum=$7
+    shift 7
+
+    local ip6_hdr=6000000000083aff${ipv6_src}${ipv6_dst}
+    local packet=${eth_dst}${eth_src}86dd${ip6_hdr}0000000000000000
+
+    local reply=${eth_src}${eth_dst}86dd6000000000303aff${ipv6_dst}${ipv6_src}0101${exp_icmp_chksum}00000000${ip6_hdr}
+    echo $reply >> vif$inport.expected
+
+    as hv$hv ovs-appctl netdev-dummy/receive vif$inport $packet
+}
+
 # test_tcp_syn_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST IP_CHKSUM TCP_SPORT TCP_DPORT TCP_CHKSUM EXP_IP_CHKSUM EXP_TCP_RST_CHKSUM
 #
 # Causes a packet to be received on INPORT of the hypervisor HV. The packet is an TCP syn segment with
@@ -9475,6 +9559,8 @@ OVS_WAIT_UNTIL([test 3 = $(ovn-sbctl lflow-list | grep 'icmp4 {' | wc -l)])
 test_ip_packet 11 1 000000000011 000000000021 $(ip_to_hex 192 168 1 11) $(ip_to_hex 192 168 1 21) 0000 7d8d fcfe
 test_ip_packet 21 2 000000000021 000000000011 $(ip_to_hex 192 168 1 21) $(ip_to_hex 192 168 1 11) 0000 7d8d fcfe
 test_ip_packet 31 3 000000000031 000000000012 $(ip_to_hex 192 168 1 31) $(ip_to_hex 192 168 1 12) 0000 7d82 fcfe
+
+test_ipv6_packet 11 1 000000000011 000000000021 fe80000000000000020001fffe000001 fe80000000000000020001fffe000002 6183
 
 test_tcp_syn_packet 11 1 000000000011 000000000021 $(ip_to_hex 192 168 1 11) $(ip_to_hex 192 168 1 21) 0000 8b40 3039 0000 7d8d 4486
 test_tcp_syn_packet 21 2 000000000021 000000000011 $(ip_to_hex 192 168 1 21) $(ip_to_hex 192 168 1 11) 0000 8b40 3039 0000 7d8d 4486
