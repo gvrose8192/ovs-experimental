@@ -50,6 +50,7 @@
 #include "seq.h"
 #include "openvswitch/shash.h"
 #include "smap.h"
+#include "socket-util.h"
 #include "sset.h"
 #include "svec.h"
 #include "openvswitch/vlog.h"
@@ -950,7 +951,7 @@ netdev_set_mtu(struct netdev *netdev, int mtu)
 
     error = class->set_mtu ? class->set_mtu(netdev, mtu) : EOPNOTSUPP;
     if (error && error != EOPNOTSUPP) {
-        VLOG_DBG_RL(&rl, "failed to set MTU for network device %s: %s",
+        VLOG_WARN_RL(&rl, "failed to set MTU for network device %s: %s",
                      netdev_get_name(netdev), ovs_strerror(error));
     }
 
@@ -1141,39 +1142,74 @@ netdev_set_in4(struct netdev *netdev, struct in_addr addr, struct in_addr mask)
             : EOPNOTSUPP);
 }
 
-/* Obtains ad IPv4 address from device name and save the address in
- * in4.  Returns 0 if successful, otherwise a positive errno value.
- */
+static int
+netdev_get_addresses_by_name(const char *device_name,
+                             struct in6_addr **addrsp, int *n_addrsp)
+{
+    struct netdev *netdev;
+    int error = netdev_open(device_name, NULL, &netdev);
+    if (error) {
+        *addrsp = NULL;
+        *n_addrsp = 0;
+        return error;
+    }
+
+    struct in6_addr *masks;
+    error = netdev_get_addr_list(netdev, addrsp, &masks, n_addrsp);
+    netdev_close(netdev);
+    free(masks);
+    return error;
+}
+
+/* Obtains an IPv4 address from 'device_name' and save the address in '*in4'.
+ * Returns 0 if successful, otherwise a positive errno value. */
 int
 netdev_get_in4_by_name(const char *device_name, struct in_addr *in4)
 {
-    struct in6_addr *mask, *addr6;
-    int err, n_in6, i;
-    struct netdev *dev;
+    struct in6_addr *addrs;
+    int n;
+    int error = netdev_get_addresses_by_name(device_name, &addrs, &n);
 
-    err = netdev_open(device_name, NULL, &dev);
-    if (err) {
-        return err;
-    }
-
-    err = netdev_get_addr_list(dev, &addr6, &mask, &n_in6);
-    if (err) {
-        goto out;
-    }
-
-    for (i = 0; i < n_in6; i++) {
-        if (IN6_IS_ADDR_V4MAPPED(&addr6[i])) {
-            in4->s_addr = in6_addr_get_mapped_ipv4(&addr6[i]);
-            goto out;
+    in4->s_addr = 0;
+    if (!error) {
+        error = ENOENT;
+        for (int i = 0; i < n; i++) {
+            if (IN6_IS_ADDR_V4MAPPED(&addrs[i])) {
+                in4->s_addr = in6_addr_get_mapped_ipv4(&addrs[i]);
+                error = 0;
+                break;
+            }
         }
     }
-    err = -ENOENT;
-out:
-    free(addr6);
-    free(mask);
-    netdev_close(dev);
-    return err;
+    free(addrs);
 
+    return error;
+}
+
+/* Obtains an IPv4 or IPv6 address from 'device_name' and save the address in
+ * '*in6', representing IPv4 addresses as v6-mapped.  Returns 0 if successful,
+ * otherwise a positive errno value. */
+int
+netdev_get_ip_by_name(const char *device_name, struct in6_addr *in6)
+{
+    struct in6_addr *addrs;
+    int n;
+    int error = netdev_get_addresses_by_name(device_name, &addrs, &n);
+
+    *in6 = in6addr_any;
+    if (!error) {
+        error = ENOENT;
+        for (int i = 0; i < n; i++) {
+            if (!in6_is_lla(&addrs[i])) {
+                *in6 = addrs[i];
+                error = 0;
+                break;
+            }
+        }
+    }
+    free(addrs);
+
+    return error;
 }
 
 /* Adds 'router' as a default IP gateway for the TCP/IP stack that corresponds
@@ -2034,29 +2070,13 @@ netdev_get_addrs(const char dev[], struct in6_addr **paddr,
     addr_array = xzalloc(sizeof *addr_array * cnt);
     mask_array = xzalloc(sizeof *mask_array * cnt);
     for (ifa = if_addr_list; ifa; ifa = ifa->ifa_next) {
-        int family;
-
-        if (!ifa->ifa_name || !ifa->ifa_addr || !ifa->ifa_netmask
-            || strncmp(ifa->ifa_name, dev, IFNAMSIZ)) {
-            continue;
-        }
-
-        family = ifa->ifa_addr->sa_family;
-        if (family == AF_INET) {
-            const struct sockaddr_in *sin;
-
-            sin = ALIGNED_CAST(const struct sockaddr_in *, ifa->ifa_addr);
-            in6_addr_set_mapped_ipv4(&addr_array[i], sin->sin_addr.s_addr);
-            sin = ALIGNED_CAST(const struct sockaddr_in *, ifa->ifa_netmask);
-            in6_addr_set_mapped_ipv4(&mask_array[i], sin->sin_addr.s_addr);
-            i++;
-        } else if (family == AF_INET6) {
-            const struct sockaddr_in6 *sin6;
-
-            sin6 = ALIGNED_CAST(const struct sockaddr_in6 *, ifa->ifa_addr);
-            memcpy(&addr_array[i], &sin6->sin6_addr, sizeof *addr_array);
-            sin6 = ALIGNED_CAST(const struct sockaddr_in6 *, ifa->ifa_netmask);
-            memcpy(&mask_array[i], &sin6->sin6_addr, sizeof *mask_array);
+        if (ifa->ifa_name
+            && ifa->ifa_addr
+            && ifa->ifa_netmask
+            && !strncmp(ifa->ifa_name, dev, IFNAMSIZ)
+            && sa_is_ip(ifa->ifa_addr)) {
+            addr_array[i] = sa_get_address(ifa->ifa_addr);
+            mask_array[i] = sa_get_address(ifa->ifa_netmask);
             i++;
         }
     }

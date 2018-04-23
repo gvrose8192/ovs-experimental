@@ -490,7 +490,7 @@ Options:\n\
 Other options:\n\
   -h, --help                  display this help message\n\
   -V, --version               display version information\n");
-    stream_usage("database", true, true, false);
+    stream_usage("database", true, true, true);
     exit(EXIT_SUCCESS);
 }
 
@@ -1782,7 +1782,6 @@ nbctl_lb_add(struct ctl_context *ctx)
 
     const char *lb_proto;
     bool is_update_proto = false;
-    bool is_vip_with_port = true;
 
     if (ctx->argc == 4) {
         /* Default protocol. */
@@ -1798,46 +1797,22 @@ nbctl_lb_add(struct ctl_context *ctx)
     }
 
     struct sockaddr_storage ss_vip;
-    char *error;
-    error = ipv46_parse(lb_vip, PORT_OPTIONAL, &ss_vip);
-    if (error) {
-        free(error);
+    if (!inet_parse_active(lb_vip, 0, &ss_vip)) {
         ctl_fatal("%s: should be an IP address (or an IP address "
                   "and a port number with : as a separator).", lb_vip);
     }
 
-    char lb_vip_normalized[INET6_ADDRSTRLEN + 8];
-    char normalized_ip[INET6_ADDRSTRLEN];
-    if (ss_vip.ss_family == AF_INET) {
-        struct sockaddr_in *sin = ALIGNED_CAST(struct sockaddr_in *, &ss_vip);
-        inet_ntop(AF_INET, &sin->sin_addr, normalized_ip,
-                  sizeof normalized_ip);
-        if (sin->sin_port) {
-            is_vip_with_port = true;
-            snprintf(lb_vip_normalized, sizeof lb_vip_normalized, "%s:%d",
-                     normalized_ip, ntohs(sin->sin_port));
-        } else {
-            is_vip_with_port = false;
-            ovs_strlcpy(lb_vip_normalized, normalized_ip,
-                        sizeof lb_vip_normalized);
-        }
+    struct ds lb_vip_normalized_ds = DS_EMPTY_INITIALIZER;
+    uint16_t lb_vip_port = ss_get_port(&ss_vip);
+    if (lb_vip_port) {
+        ss_format_address(&ss_vip, &lb_vip_normalized_ds);
+        ds_put_format(&lb_vip_normalized_ds, ":%d", lb_vip_port);
     } else {
-        struct sockaddr_in6 *sin6 = ALIGNED_CAST(struct sockaddr_in6 *,
-                                                 &ss_vip);
-        inet_ntop(AF_INET6, &sin6->sin6_addr, normalized_ip,
-                  sizeof normalized_ip);
-        if (sin6->sin6_port) {
-            is_vip_with_port = true;
-            snprintf(lb_vip_normalized, sizeof lb_vip_normalized, "[%s]:%d",
-                     normalized_ip, ntohs(sin6->sin6_port));
-        } else {
-            is_vip_with_port = false;
-            ovs_strlcpy(lb_vip_normalized, normalized_ip,
-                        sizeof lb_vip_normalized);
-        }
+        ss_format_address_nobracks(&ss_vip, &lb_vip_normalized_ds);
     }
+    const char *lb_vip_normalized = ds_cstr(&lb_vip_normalized_ds);
 
-    if (!is_vip_with_port && is_update_proto) {
+    if (!lb_vip_port && is_update_proto) {
         ctl_fatal("Protocol is unnecessary when no port of vip "
                   "is given.");
     }
@@ -1848,17 +1823,13 @@ nbctl_lb_add(struct ctl_context *ctx)
             token != NULL; token = strtok_r(NULL, ",", &save_ptr)) {
         struct sockaddr_storage ss_dst;
 
-        error = ipv46_parse(token, is_vip_with_port
-                ? PORT_REQUIRED
-                : PORT_FORBIDDEN,
-                &ss_dst);
-
-        if (error) {
-            free(error);
-            if (is_vip_with_port) {
+        if (lb_vip_port) {
+            if (!inet_parse_active(token, -1, &ss_dst)) {
                 ctl_fatal("%s: should be an IP address and a port "
-                        "number with : as a separator.", token);
-            } else {
+                          "number with : as a separator.", token);
+            }
+        } else {
+            if (!inet_parse_address(token, &ss_dst)) {
                 ctl_fatal("%s: should be an IP address.", token);
             }
         }
@@ -1899,6 +1870,7 @@ nbctl_lb_add(struct ctl_context *ctx)
             nbrec_load_balancer_verify_vips(lb);
             nbrec_load_balancer_set_vips(lb, &lb->vips);
             ds_destroy(&lb_ips_new);
+            ds_destroy(&lb_vip_normalized_ds);
             return;
         }
     }
@@ -1911,6 +1883,8 @@ nbctl_lb_add(struct ctl_context *ctx)
             lb_vip_normalized, ds_cstr(&lb_ips_new));
     nbrec_load_balancer_set_vips(lb, &lb->vips);
     ds_destroy(&lb_ips_new);
+
+    ds_destroy(&lb_vip_normalized_ds);
 }
 
 static void
@@ -1952,38 +1926,18 @@ static void
 lb_info_add_smap(const struct nbrec_load_balancer *lb,
                  struct smap *lbs, int vip_width)
 {
-    struct ds key = DS_EMPTY_INITIALIZER;
-    struct ds val = DS_EMPTY_INITIALIZER;
-    char *error, *protocol;
-
     const struct smap_node **nodes = smap_sort(&lb->vips);
     if (nodes) {
+        struct ds val = DS_EMPTY_INITIALIZER;
         for (int i = 0; i < smap_count(&lb->vips); i++) {
             const struct smap_node *node = nodes[i];
-            protocol = lb->protocol;
 
             struct sockaddr_storage ss;
-            error = ipv46_parse(node->key, PORT_OPTIONAL, &ss);
-            if (error) {
-                VLOG_WARN("%s", error);
-                free(error);
+            if (!inet_parse_active(node->key, 0, &ss)) {
                 continue;
             }
 
-            if (ss.ss_family == AF_INET) {
-                struct sockaddr_in *sin = ALIGNED_CAST(struct sockaddr_in *,
-                                                       &ss);
-                if (!sin->sin_port) {
-                    protocol = "tcp/udp";
-                }
-            } else {
-                struct sockaddr_in6 *sin6 = ALIGNED_CAST(struct sockaddr_in6 *,
-                                                         &ss);
-                if (!sin6->sin6_port) {
-                    protocol = "tcp/udp";
-                }
-            }
-
+            char *protocol = ss_get_port(&ss) ? lb->protocol : "tcp/udp";
             i == 0 ? ds_put_format(&val,
                         UUID_FMT "    %-20.16s%-11.7s%-*.*s%s",
                         UUID_ARGS(&lb->header_.uuid),
@@ -1996,11 +1950,8 @@ lb_info_add_smap(const struct nbrec_load_balancer *lb,
                         node->key, node->value);
         }
 
-        ds_put_format(&key, "%-20.16s", lb->name);
-        smap_add(lbs, ds_cstr(&key), ds_cstr(&val));
-
-        ds_destroy(&key);
-        ds_destroy(&val);
+        smap_add_nocopy(lbs, xasprintf("%-20.16s", lb->name),
+                        ds_steal_cstr(&val));
         free(nodes);
     }
 }
