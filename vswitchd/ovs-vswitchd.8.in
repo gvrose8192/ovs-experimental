@@ -59,11 +59,12 @@ Only a single instance of \fBovs\-vswitchd\fR is intended to run at a time.
 A single \fBovs\-vswitchd\fR can manage any number of switch instances, up
 to the maximum number of supported Open vSwitch datapaths.
 .PP
-\fBovs\-vswitchd\fR does all the necessary management of Open vSwitch datapaths
-itself.  Thus, external tools, such \fBovs\-dpctl\fR(8), are not needed for
-managing datapaths in conjunction with \fBovs\-vswitchd\fR, and their use
-to modify datapaths when \fBovs\-vswitchd\fR is running can interfere with
-its operation.  (\fBovs\-dpctl\fR may still be useful for diagnostics.)
+\fBovs\-vswitchd\fR does all the necessary management of Open vSwitch
+datapaths itself.  Thus, \fBovs\-dpctl\fR(8) (and its userspace
+datapath counterparts accessible via \fBovs\-appctl
+dpctl/\fIcommand\fR) are not needed with \fBovs\-vswitchd\fR and should
+not be used because they can interfere with its operation.  These
+tools are still useful for diagnostics.
 .PP
 An Open vSwitch datapath kernel module must be loaded for \fBovs\-vswitchd\fR
 to be useful.  Refer to the documentation for instructions on how to build and
@@ -96,6 +97,7 @@ configuration.
 .SS "Public Key Infrastructure Options"
 .so lib/ssl.man
 .so lib/ssl-bootstrap.man
+.so lib/ssl-peer-ca-cert.man
 .SS "Logging Options"
 .so lib/vlog.man
 .SS "Other Options"
@@ -326,7 +328,10 @@ replies for a switch defined time greater than 1s, it may send an
 ofp_error_msg with OFPET_BUNDLE_FAILED type and OFPBFC_TIMEOUT code.
 .
 .PP
-Open vSwitch implements idle bundle lifetime of 10 seconds.
+Open vSwitch implements default idle bundle lifetime of 10 seconds.
+(This is configurable via \fBother-config:bundle-idle-timeout\fR in
+the \fBOpen_vSwitch\fR table. See \fBovs-vswitchd.conf.db\fR(5)
+for details.)
 .
 .SH "LIMITS"
 .

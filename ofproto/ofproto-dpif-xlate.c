@@ -3310,6 +3310,7 @@ propagate_tunnel_data_to_flow__(struct flow *dst_flow,
     dst_flow->ipv6_dst = src_flow->tunnel.ipv6_dst;
     dst_flow->ipv6_src = src_flow->tunnel.ipv6_src;
 
+    dst_flow->nw_frag = 0; /* Tunnel packets are unfragmented. */
     dst_flow->nw_tos = src_flow->tunnel.ip_tos;
     dst_flow->nw_ttl = src_flow->tunnel.ip_ttl;
     dst_flow->tp_dst = src_flow->tunnel.tp_dst;
@@ -7138,10 +7139,14 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
             ctx.error = XLATE_INVALID_TUNNEL_METADATA;
             goto exit;
         }
-    } else if (!flow->tunnel.metadata.tab) {
+    } else if (!flow->tunnel.metadata.tab || xin->frozen_state) {
         /* If the original flow did not come in on a tunnel, then it won't have
          * FLOW_TNL_F_UDPIF set. However, we still need to have a metadata
          * table in case we generate tunnel actions. */
+        /* If the translation is from a frozen state, we use the latest
+         * TLV map to avoid segmentation fault in case the old TLV map is
+         * replaced by a new one.
+         * XXX: It is better to abort translation if the table is changed. */
         flow->tunnel.metadata.tab = ofproto_get_tun_tab(
             &ctx.xbridge->ofproto->up);
     }
@@ -7207,6 +7212,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
          *
          * We do not perform special processing on thawed packets, since that
          * was done before they were frozen and should not be redone. */
+        mirror_ingress_packet(&ctx);
     } else if (in_port && in_port->xbundle
                && xbundle_mirror_out(xbridge, in_port->xbundle)) {
         xlate_report_error(&ctx, "dropping packet received on port "
