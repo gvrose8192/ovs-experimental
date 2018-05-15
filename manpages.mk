@@ -252,6 +252,7 @@ vswitchd/ovs-vswitchd.8: \
 	lib/coverage-unixctl.man \
 	lib/daemon.man \
 	lib/dpctl.man \
+	lib/dpif-netdev-unixctl.man \
 	lib/memory-unixctl.man \
 	lib/netdev-dpdk-unixctl.man \
 	lib/service.man \
@@ -269,10 +270,12 @@ lib/common.man:
 lib/coverage-unixctl.man:
 lib/daemon.man:
 lib/dpctl.man:
+lib/dpif-netdev-unixctl.man:
 lib/memory-unixctl.man:
 lib/netdev-dpdk-unixctl.man:
 lib/service.man:
 lib/ssl-bootstrap.man:
+lib/ssl-peer-ca-cert.man:
 lib/ssl.man:
 lib/unixctl.man:
 lib/vlog-unixctl.man:
