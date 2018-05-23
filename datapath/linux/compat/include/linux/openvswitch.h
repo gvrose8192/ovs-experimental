@@ -238,6 +238,9 @@ enum ovs_vport_type {
 	OVS_VPORT_TYPE_GENEVE,	 /* Geneve tunnel. */
 	OVS_VPORT_TYPE_LISP = 105,  /* LISP tunnel */
 	OVS_VPORT_TYPE_STT = 106, /* STT tunnel */
+	OVS_VPORT_TYPE_ERSPAN = 107, /* ERSPAN tunnel. */
+	OVS_VPORT_TYPE_IP6ERSPAN = 108, /* ERSPAN tunnel. */
+	OVS_VPORT_TYPE_IP6GRE = 109,
 	__OVS_VPORT_TYPE_MAX
 };
 
@@ -395,6 +398,7 @@ enum ovs_tunnel_key_attr {
 	OVS_TUNNEL_KEY_ATTR_IPV6_SRC,		/* struct in6_addr src IPv6 address. */
 	OVS_TUNNEL_KEY_ATTR_IPV6_DST,		/* struct in6_addr dst IPv6 address. */
 	OVS_TUNNEL_KEY_ATTR_PAD,
+	OVS_TUNNEL_KEY_ATTR_ERSPAN_OPTS,	/* struct erspan_metadata */
 	__OVS_TUNNEL_KEY_ATTR_MAX
 };
 

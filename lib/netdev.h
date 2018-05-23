@@ -127,6 +127,18 @@ struct netdev_tunnel_config {
     bool csum;
     bool dont_fragment;
     enum netdev_pt_mode pt_mode;
+
+    bool set_seq;
+    uint32_t seqno;
+    uint32_t erspan_idx;
+    uint8_t erspan_ver;
+    uint8_t erspan_dir;
+    uint8_t erspan_hwid;
+
+    bool erspan_ver_flow;
+    bool erspan_idx_flow;
+    bool erspan_dir_flow;
+    bool erspan_hwid_flow;
 };
 
 void netdev_run(void);

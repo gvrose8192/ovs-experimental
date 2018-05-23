@@ -13,6 +13,8 @@ openvswitch_sources += \
 	linux/compat/ip_tunnel.c \
 	linux/compat/ip_tunnels_core.c \
 	linux/compat/ip6_output.c \
+	linux/compat/ip6_gre.c \
+	linux/compat/ip6_tunnel.c \
 	linux/compat/lisp.c \
 	linux/compat/netdevice.c \
 	linux/compat/nf_conntrack_core.c \
@@ -104,5 +106,6 @@ openvswitch_headers += \
 	linux/compat/include/net/netfilter/nf_conntrack_zones.h \
 	linux/compat/include/net/netfilter/nf_nat.h \
 	linux/compat/include/net/netfilter/ipv6/nf_defrag_ipv6.h \
-	linux/compat/include/net/sctp/checksum.h
+	linux/compat/include/net/sctp/checksum.h \
+	linux/compat/include/net/erspan.h
 EXTRA_DIST += linux/compat/build-aux/export-check-whitelist

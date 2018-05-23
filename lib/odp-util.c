@@ -690,7 +690,8 @@ format_odp_tnl_push_header(struct ds *ds, struct ovs_action_push_tnl *data)
         }
 
         ds_put_char(ds, ')');
-    } else if (data->tnl_type == OVS_VPORT_TYPE_GRE) {
+    } else if (data->tnl_type == OVS_VPORT_TYPE_GRE ||
+               data->tnl_type == OVS_VPORT_TYPE_IP6GRE) {
         const struct gre_base_hdr *greh;
         ovs_16aligned_be32 *options;
 
@@ -712,6 +713,28 @@ format_odp_tnl_push_header(struct ds *ds, struct ovs_action_push_tnl *data)
             options++;
         }
         ds_put_format(ds, ")");
+    } else if (data->tnl_type == OVS_VPORT_TYPE_ERSPAN ||
+               data->tnl_type == OVS_VPORT_TYPE_IP6ERSPAN) {
+        const struct gre_base_hdr *greh;
+        const struct erspan_base_hdr *ersh;
+
+        greh = (const struct gre_base_hdr *) l4;
+        ersh = ERSPAN_HDR(greh);
+
+        if (ersh->ver == 1) {
+            ovs_16aligned_be32 *index = ALIGNED_CAST(ovs_16aligned_be32 *,
+                                                     ersh + 1);
+            ds_put_format(ds, "erspan(ver=1,sid=0x%"PRIx16",idx=0x%"PRIx32")",
+                          get_sid(ersh), ntohl(get_16aligned_be32(index)));
+        } else if (ersh->ver == 2) {
+            struct erspan_md2 *md2 = ALIGNED_CAST(struct erspan_md2 *,
+                                                  ersh + 1);
+            ds_put_format(ds, "erspan(ver=2,sid=0x%"PRIx16
+                          ",dir=%"PRIu8",hwid=0x%"PRIx8")",
+                          get_sid(ersh), md2->dir, get_hwid(md2));
+        } else {
+            VLOG_WARN("%s Invalid ERSPAN version %d\n", __func__, ersh->ver);
+        }
     }
     ds_put_format(ds, ")");
 }
@@ -1399,11 +1422,14 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
     struct ovs_16aligned_ip6_hdr *ip6;
     struct udp_header *udp;
     struct gre_base_hdr *greh;
-    uint16_t gre_proto, gre_flags, dl_type, udp_src, udp_dst, csum;
+    struct erspan_base_hdr *ersh;
+    struct erspan_md2 *md2;
+    uint16_t gre_proto, gre_flags, dl_type, udp_src, udp_dst, csum, sid;
     ovs_be32 sip, dip;
-    uint32_t tnl_type = 0, header_len = 0, ip_len = 0;
+    uint32_t tnl_type = 0, header_len = 0, ip_len = 0, erspan_idx = 0;
     void *l3, *l4;
     int n = 0;
+    uint8_t hwid, dir;
 
     if (!ovs_scan_len(s, &n, "tnl_push(tnl_port(%"SCNi32"),", &data->tnl_port)) {
         return -EINVAL;
@@ -1534,7 +1560,11 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
     } else if (ovs_scan_len(s, &n, "gre((flags=0x%"SCNx16",proto=0x%"SCNx16")",
                             &gre_flags, &gre_proto)){
 
-        tnl_type = OVS_VPORT_TYPE_GRE;
+        if (eth->eth_type == htons(ETH_TYPE_IP)) {
+            tnl_type = OVS_VPORT_TYPE_GRE;
+        } else {
+            tnl_type = OVS_VPORT_TYPE_IP6GRE;
+        }
         greh->flags = htons(gre_flags);
         greh->protocol = htons(gre_proto);
         ovs_16aligned_be32 *options = (ovs_16aligned_be32 *) (greh + 1);
@@ -1574,6 +1604,57 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
 
         header_len = sizeof *eth + ip_len +
                      ((uint8_t *) options - (uint8_t *) greh);
+    } else if (ovs_scan_len(s, &n, "erspan(ver=1,sid="SCNx16",idx=0x"SCNx32")",
+                            &sid, &erspan_idx)) {
+        ersh = ERSPAN_HDR(greh);
+        ovs_16aligned_be32 *index = ALIGNED_CAST(ovs_16aligned_be32 *,
+                                                 ersh + 1);
+
+        if (eth->eth_type == htons(ETH_TYPE_IP)) {
+            tnl_type = OVS_VPORT_TYPE_ERSPAN;
+        } else {
+            tnl_type = OVS_VPORT_TYPE_IP6ERSPAN;
+        }
+
+        greh->flags = htons(GRE_SEQ);
+        greh->protocol = htons(ETH_TYPE_ERSPAN1);
+
+        ersh->ver = 1;
+        set_sid(ersh, sid);
+        put_16aligned_be32(index, htonl(erspan_idx));
+
+        if (!ovs_scan_len(s, &n, ")")) {
+            return -EINVAL;
+        }
+        header_len = sizeof *eth + ip_len + ERSPAN_GREHDR_LEN +
+                     sizeof *ersh + ERSPAN_V1_MDSIZE;
+
+    } else if (ovs_scan_len(s, &n, "erspan(ver=2,sid="SCNx16"dir="SCNu8
+                            ",hwid=0x"SCNx8")", &sid, &dir, &hwid)) {
+
+        ersh = ERSPAN_HDR(greh);
+        md2 = ALIGNED_CAST(struct erspan_md2 *, ersh + 1);
+
+        if (eth->eth_type == htons(ETH_TYPE_IP)) {
+            tnl_type = OVS_VPORT_TYPE_ERSPAN;
+        } else {
+            tnl_type = OVS_VPORT_TYPE_IP6ERSPAN;
+        }
+
+        greh->flags = htons(GRE_SEQ);
+        greh->protocol = htons(ETH_TYPE_ERSPAN2);
+
+        ersh->ver = 2;
+        set_sid(ersh, sid);
+        set_hwid(md2, hwid);
+        md2->dir = dir;
+
+        if (!ovs_scan_len(s, &n, ")")) {
+            return -EINVAL;
+        }
+
+        header_len = sizeof *eth + ip_len + ERSPAN_GREHDR_LEN +
+                     sizeof *ersh + ERSPAN_V2_MDSIZE;
     } else {
         return -EINVAL;
     }
@@ -2375,6 +2456,7 @@ static const struct attr_len_tbl ovs_tun_key_attr_lens[OVS_TUNNEL_KEY_ATTR_MAX +
                                             .next_max = OVS_VXLAN_EXT_MAX},
     [OVS_TUNNEL_KEY_ATTR_IPV6_SRC]      = { .len = 16 },
     [OVS_TUNNEL_KEY_ATTR_IPV6_DST]      = { .len = 16 },
+    [OVS_TUNNEL_KEY_ATTR_ERSPAN_OPTS]   = { .len = ATTR_LEN_VARIABLE },
 };
 
 const struct attr_len_tbl ovs_flow_key_attr_lens[OVS_KEY_ATTR_MAX + 1] = {
@@ -2698,6 +2780,23 @@ odp_tun_key_from_attr__(const struct nlattr *attr, bool is_mask,
         case OVS_TUNNEL_KEY_ATTR_GENEVE_OPTS:
             tun_metadata_from_geneve_nlattr(a, is_mask, tun);
             break;
+        case OVS_TUNNEL_KEY_ATTR_ERSPAN_OPTS: {
+            int attr_len = nl_attr_get_size(a);
+            struct erspan_metadata opts;
+
+            memcpy(&opts, nl_attr_get(a), attr_len);
+
+            tun->erspan_ver = opts.version;
+            if (tun->erspan_ver == 1) {
+                tun->erspan_idx = ntohl(opts.u.index);
+            } else if (tun->erspan_ver == 2) {
+                tun->erspan_dir = opts.u.md2.dir;
+                tun->erspan_hwid = get_hwid(&opts.u.md2);
+            } else {
+                VLOG_WARN("%s invalid erspan version\n", __func__);
+            }
+            break;
+        }
 
         default:
             /* Allow this to show up as unexpected, if there are unknown
@@ -2785,6 +2884,22 @@ tun_key_to_attr(struct ofpbuf *a, const struct flow_tnl *tun_key,
 
     if (!tnl_type || !strcmp(tnl_type, "geneve")) {
         tun_metadata_to_geneve_nlattr(tun_key, tun_flow_key, key_buf, a);
+    }
+
+    if ((!tnl_type || !strcmp(tnl_type, "erspan") ||
+        !strcmp(tnl_type, "ip6erspan")) &&
+        (tun_key->erspan_ver == 1 || tun_key->erspan_ver == 2)) {
+        struct erspan_metadata opts;
+
+        opts.version = tun_key->erspan_ver;
+        if (opts.version == 1) {
+            opts.u.index = htonl(tun_key->erspan_idx);
+        } else {
+            opts.u.md2.dir = tun_key->erspan_dir;
+            set_hwid(&opts.u.md2, tun_key->erspan_hwid);
+        }
+        nl_msg_put_unspec(a, OVS_TUNNEL_KEY_ATTR_ERSPAN_OPTS,
+                          &opts, sizeof(opts));
     }
 
     nl_msg_end_nested(a, tun_key_ofs);
@@ -3242,6 +3357,46 @@ format_odp_tun_vxlan_opt(const struct nlattr *attr,
     ofpbuf_uninit(&ofp);
 }
 
+static void
+format_odp_tun_erspan_opt(const struct nlattr *attr,
+                         const struct nlattr *mask_attr, struct ds *ds,
+                         bool verbose)
+{
+    const struct erspan_metadata *opts, *mask;
+    uint8_t ver, ver_ma, dir, dir_ma, hwid, hwid_ma;
+
+    opts = nl_attr_get(attr);
+    mask = mask_attr ? nl_attr_get(mask_attr) : NULL;
+
+    ver = (uint8_t)opts->version;
+    if (mask) {
+        ver_ma = (uint8_t)mask->version;
+    }
+
+    format_u8u(ds, "ver", ver, mask ? &ver_ma : NULL, verbose);
+
+    if (opts->version == 1) {
+        if (mask) {
+            ds_put_format(ds, "idx=%#"PRIx32"/%#"PRIx32",",
+                          ntohl(opts->u.index),
+                          ntohl(mask->u.index));
+        } else {
+            ds_put_format(ds, "idx=%#"PRIx32",", ntohl(opts->u.index));
+        }
+    } else if (opts->version == 2) {
+        dir = opts->u.md2.dir;
+        hwid = opts->u.md2.hwid;
+        if (mask) {
+            dir_ma = mask->u.md2.dir;
+            hwid_ma = mask->u.md2.hwid;
+        }
+
+        format_u8u(ds, "dir", dir, mask ? &dir_ma : NULL, verbose);
+        format_u8x(ds, "hwid", hwid, mask ? &hwid_ma : NULL, verbose);
+    }
+    ds_chomp(ds, ',');
+}
+
 #define MASK(PTR, FIELD) PTR ? &PTR->FIELD : NULL
 
 static void
@@ -3488,6 +3643,11 @@ format_odp_tun_attr(const struct nlattr *attr, const struct nlattr *mask_attr,
             ds_put_cstr(ds, "),");
             break;
         case OVS_TUNNEL_KEY_ATTR_PAD:
+            break;
+        case OVS_TUNNEL_KEY_ATTR_ERSPAN_OPTS:
+            ds_put_cstr(ds, "erspan(");
+            format_odp_tun_erspan_opt(a, ma, ds, verbose);
+            ds_put_cstr(ds, "),");
             break;
         case __OVS_TUNNEL_KEY_ATTR_MAX:
         default:
@@ -4673,6 +4833,70 @@ scan_vxlan_gbp(const char *s, uint32_t *key, uint32_t *mask)
 }
 
 static int
+scan_erspan_metadata(const char *s,
+                     struct erspan_metadata *key,
+                     struct erspan_metadata *mask)
+{
+    const char *s_base = s;
+    uint32_t idx = 0, idx_mask = 0;
+    uint8_t ver = 0, dir = 0, hwid = 0;
+    uint8_t ver_mask = 0, dir_mask = 0, hwid_mask = 0;
+
+    if (!strncmp(s, "ver=", 4)) {
+        s += 4;
+        s += scan_u8(s, &ver, mask ? &ver_mask : NULL);
+    }
+
+    if (s[0] == ',') {
+        s++;
+    }
+
+    if (ver == 1) {
+        if (!strncmp(s, "idx=", 4)) {
+            s += 4;
+            s += scan_u32(s, &idx, mask ? &idx_mask : NULL);
+        }
+
+        if (!strncmp(s, ")", 1)) {
+            s += 1;
+            key->version = ver;
+            key->u.index = htonl(idx);
+            if (mask) {
+                mask->u.index = htonl(idx_mask);
+            }
+        }
+        return s - s_base;
+
+    } else if (ver == 2) {
+        if (!strncmp(s, "dir=", 4)) {
+            s += 4;
+            s += scan_u8(s, &dir, mask ? &dir_mask : NULL);
+        }
+        if (s[0] == ',') {
+            s++;
+        }
+        if (!strncmp(s, "hwid=", 5)) {
+            s += 5;
+            s += scan_u8(s, &hwid, mask ? &hwid_mask : NULL);
+        }
+
+        if (!strncmp(s, ")", 1)) {
+            s += 1;
+            key->version = ver;
+            key->u.md2.hwid = hwid;
+            key->u.md2.dir = dir;
+            if (mask) {
+                mask->u.md2.hwid = hwid_mask;
+                mask->u.md2.dir = dir_mask;
+            }
+        }
+        return s - s_base;
+    }
+
+    return 0;
+}
+
+static int
 scan_geneve(const char *s, struct geneve_scan *key, struct geneve_scan *mask)
 {
     const char *s_base = s;
@@ -4805,6 +5029,15 @@ geneve_to_attr(struct ofpbuf *a, const void *data_)
 
     nl_msg_put_unspec(a, OVS_TUNNEL_KEY_ATTR_GENEVE_OPTS, geneve->d,
                       geneve->len);
+}
+
+static void
+erspan_to_attr(struct ofpbuf *a, const void *data_)
+{
+    const struct erspan_metadata *md = data_;
+
+    nl_msg_put_unspec(a, OVS_TUNNEL_KEY_ATTR_ERSPAN_OPTS, md,
+                      sizeof *md);
 }
 
 #define SCAN_PUT_ATTR(BUF, ATTR, DATA, FUNC)                      \
@@ -5175,6 +5408,8 @@ parse_odp_key_mask_attr(const char *s, const struct simap *port_names,
         SCAN_FIELD_NESTED("ttl=", uint8_t, u8, OVS_TUNNEL_KEY_ATTR_TTL);
         SCAN_FIELD_NESTED("tp_src=", ovs_be16, be16, OVS_TUNNEL_KEY_ATTR_TP_SRC);
         SCAN_FIELD_NESTED("tp_dst=", ovs_be16, be16, OVS_TUNNEL_KEY_ATTR_TP_DST);
+        SCAN_FIELD_NESTED_FUNC("erspan(", struct erspan_metadata, erspan_metadata,
+                               erspan_to_attr);
         SCAN_FIELD_NESTED_FUNC("vxlan(gbp(", uint32_t, vxlan_gbp, vxlan_gbp_to_attr);
         SCAN_FIELD_NESTED_FUNC("geneve(", struct geneve_scan, geneve,
                                geneve_to_attr);

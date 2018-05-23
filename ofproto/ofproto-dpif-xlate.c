@@ -3377,6 +3377,9 @@ propagate_tunnel_data_to_flow(struct xlate_ctx *ctx, struct eth_addr dmac,
 
     switch (tnl_type) {
     case OVS_VPORT_TYPE_GRE:
+    case OVS_VPORT_TYPE_ERSPAN:
+    case OVS_VPORT_TYPE_IP6ERSPAN:
+    case OVS_VPORT_TYPE_IP6GRE:
         nw_proto = IPPROTO_GRE;
         break;
     case OVS_VPORT_TYPE_VXLAN:
@@ -3914,7 +3917,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
 
     /* If 'struct flow' gets additional metadata, we'll need to zero it out
      * before traversing a patch port. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 40);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
     memset(&flow_tnl, 0, sizeof flow_tnl);
 
     if (!check_output_prerequisites(ctx, xport, flow, check_stp)) {
