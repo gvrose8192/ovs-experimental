@@ -366,6 +366,8 @@ struct netdev_dpdk {
 
         /* If true, device was attached by rte_eth_dev_attach(). */
         bool attached;
+        /* If true, rte_eth_dev_start() was successfully called */
+        bool started;
         struct eth_addr hwaddr;
         int mtu;
         int socket_id;
@@ -529,19 +531,20 @@ ovs_rte_pktmbuf_init(struct rte_mempool *mp OVS_UNUSED,
 static int
 dpdk_mp_full(const struct rte_mempool *mp) OVS_REQUIRES(dpdk_mp_mutex)
 {
-    unsigned ring_count;
-    /* This logic is needed because rte_mempool_full() is not guaranteed to
-     * be atomic and mbufs could be moved from mempool cache --> mempool ring
-     * during the call. However, as no mbufs will be taken from the mempool
-     * at this time, we can work around it by also checking the ring entries
-     * separately and ensuring that they have not changed.
+    /* At this point we want to know if all the mbufs are back
+     * in the mempool. rte_mempool_full() is not atomic but it's
+     * the best available and as we are no longer requesting mbufs
+     * from the mempool, it means mbufs will not move from
+     * 'mempool ring' --> 'mempool cache'. In rte_mempool_full()
+     * the ring is counted before caches, so we won't get false
+     * positives in this use case and we handle false negatives.
+     *
+     * If future implementations of rte_mempool_full() were to change
+     * it could be possible for a false positive. Even that would
+     * likely be ok, as there are additional checks during mempool
+     * freeing but it would make things racey.
      */
-    ring_count = rte_mempool_ops_get_count(mp);
-    if (rte_mempool_full(mp) && rte_mempool_ops_get_count(mp) == ring_count) {
-        return 1;
-    }
-
-    return 0;
+    return rte_mempool_full(mp);
 }
 
 /* Free unused mempools. */
@@ -785,7 +788,7 @@ dpdk_eth_dev_port_config(struct netdev_dpdk *dev, int n_rxq, int n_txq)
      * than highlighting the one known not to need scatter */
     if (dev->mtu > ETHER_MTU) {
         rte_eth_dev_info_get(dev->port_id, &info);
-        if (strncmp(info.driver_name, "net_nfp", 6)) {
+        if (strncmp(info.driver_name, "net_nfp", 7)) {
             conf.rxmode.enable_scatter = 1;
         }
     }
@@ -910,6 +913,7 @@ dpdk_eth_dev_init(struct netdev_dpdk *dev)
                  rte_strerror(-diag));
         return -diag;
     }
+    dev->started = true;
 
     rte_eth_promiscuous_enable(dev->port_id);
     rte_eth_allmulticast_enable(dev->port_id);
@@ -1193,6 +1197,7 @@ netdev_dpdk_destruct(struct netdev *netdev)
     ovs_mutex_lock(&dpdk_mutex);
 
     rte_eth_dev_stop(dev->port_id);
+    dev->started = false;
 
     if (dev->attached) {
         rte_eth_dev_close(dev->port_id);
@@ -3690,13 +3695,15 @@ netdev_dpdk_reconfigure(struct netdev *netdev)
         && dev->lsc_interrupt_mode == dev->requested_lsc_interrupt_mode
         && dev->rxq_size == dev->requested_rxq_size
         && dev->txq_size == dev->requested_txq_size
-        && dev->socket_id == dev->requested_socket_id) {
+        && dev->socket_id == dev->requested_socket_id
+        && dev->started) {
         /* Reconfiguration is unnecessary */
 
         goto out;
     }
 
     rte_eth_dev_stop(dev->port_id);
+    dev->started = false;
 
     err = netdev_dpdk_mempool_configure(dev);
     if (err && err != EEXIST) {

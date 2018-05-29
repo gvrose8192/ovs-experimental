@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +31,7 @@
 #include "lacp.h"
 #include "learn.h"
 #include "mac-learning.h"
+#include "math.h"
 #include "mcast-snooping.h"
 #include "multipath.h"
 #include "netdev-vport.h"
@@ -1291,6 +1291,50 @@ check_ct_clear(struct dpif_backer *backer)
     return supported;
 }
 
+/* Probe the highest dp_hash algorithm supported by the datapath. */
+static size_t
+check_max_dp_hash_alg(struct dpif_backer *backer)
+{
+    struct odputil_keybuf keybuf;
+    struct ofpbuf key;
+    struct flow flow;
+    struct ovs_action_hash *hash;
+    int max_alg = 0;
+
+    struct odp_flow_key_parms odp_parms = {
+        .flow = &flow,
+        .probe = true,
+    };
+
+    memset(&flow, 0, sizeof flow);
+    ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
+    odp_flow_key_from_flow(&odp_parms, &key);
+
+    /* All datapaths support algortithm 0 (OVS_HASH_ALG_L4). */
+    for (int alg = 1; alg < __OVS_HASH_MAX; alg++) {
+        struct ofpbuf actions;
+        bool ok;
+
+        ofpbuf_init(&actions, 300);
+        hash = nl_msg_put_unspec_uninit(&actions,
+                                        OVS_ACTION_ATTR_HASH, sizeof *hash);
+        hash->hash_basis = 0;
+        hash->hash_alg = alg;
+        ok = dpif_probe_feature(backer->dpif, "Max dp_hash algorithm", &key,
+                                &actions, NULL);
+        ofpbuf_uninit(&actions);
+        if (ok) {
+            max_alg = alg;
+        } else {
+            break;
+        }
+    }
+
+    VLOG_INFO("%s: Max dp_hash algorithm probed to be %d",
+            dpif_name(backer->dpif), max_alg);
+    return max_alg;
+}
+
 #define CHECK_FEATURE__(NAME, SUPPORT, FIELD, VALUE, ETHTYPE)               \
 static bool                                                                 \
 check_##NAME(struct dpif_backer *backer)                                    \
@@ -1353,6 +1397,7 @@ check_support(struct dpif_backer *backer)
     backer->rt_support.sample_nesting = check_max_sample_nesting(backer);
     backer->rt_support.ct_eventmask = check_ct_eventmask(backer);
     backer->rt_support.ct_clear = check_ct_clear(backer);
+    backer->rt_support.max_hash_alg = check_max_dp_hash_alg(backer);
 
     /* Flow fields. */
     backer->rt_support.odp.ct_state = check_ct_state(backer);
@@ -4717,6 +4762,162 @@ group_dpif_credit_stats(struct group_dpif *group,
     ovs_mutex_unlock(&group->stats_mutex);
 }
 
+/* Calculate the dp_hash mask needed to provide the least weighted bucket
+ * with at least one hash value and construct a mapping table from masked
+ * dp_hash value to group bucket using the Webster method.
+ * If the caller specifies a non-zero max_hash value, abort and return false
+ * if more hash values would be required. The absolute maximum number of
+ * hash values supported is 256. */
+
+#define MAX_SELECT_GROUP_HASH_VALUES 256
+
+static bool
+group_setup_dp_hash_table(struct group_dpif *group, size_t max_hash)
+{
+    struct ofputil_bucket *bucket;
+    uint32_t n_buckets = group->up.n_buckets;
+    uint64_t total_weight = 0;
+    uint16_t min_weight = UINT16_MAX;
+    struct webster {
+        struct ofputil_bucket *bucket;
+        uint32_t divisor;
+        double value;
+        int hits;
+    } *webster;
+
+    if (n_buckets == 0) {
+        VLOG_DBG("  Don't apply dp_hash method without buckets.");
+        return false;
+    }
+
+    webster = xcalloc(n_buckets, sizeof(struct webster));
+    int i = 0;
+    LIST_FOR_EACH (bucket, list_node, &group->up.buckets) {
+        if (bucket->weight > 0 && bucket->weight < min_weight) {
+            min_weight = bucket->weight;
+        }
+        total_weight += bucket->weight;
+        webster[i].bucket = bucket;
+        webster[i].divisor = 1;
+        webster[i].value = bucket->weight;
+        webster[i].hits = 0;
+        i++;
+    }
+
+    if (total_weight == 0) {
+        VLOG_DBG("  Total weight is zero. No active buckets.");
+        free(webster);
+        return false;
+    }
+    VLOG_DBG("  Minimum weight: %d, total weight: %"PRIu64,
+             min_weight, total_weight);
+
+    uint64_t min_slots = DIV_ROUND_UP(total_weight, min_weight);
+    uint64_t min_slots2 = ROUND_UP_POW2(min_slots);
+    uint64_t n_hash = MAX(16, min_slots2);
+    if (n_hash > MAX_SELECT_GROUP_HASH_VALUES ||
+        (max_hash != 0 && n_hash > max_hash)) {
+        VLOG_DBG("  Too many hash values required: %"PRIu64, n_hash);
+        return false;
+    }
+
+    VLOG_DBG("  Using %"PRIu64" hash values:", n_hash);
+    group->hash_mask = n_hash - 1;
+    if (group->hash_map) {
+        free(group->hash_map);
+    }
+    group->hash_map = xcalloc(n_hash, sizeof(struct ofputil_bucket *));
+
+    /* Use Webster method to distribute hash values over buckets. */
+    for (int hash = 0; hash < n_hash; hash++) {
+        struct webster *winner = &webster[0];
+        for (i = 1; i < n_buckets; i++) {
+            if (webster[i].value > winner->value) {
+                winner = &webster[i];
+            }
+        }
+        winner->hits++;
+        winner->divisor += 2;
+        winner->value = (double) winner->bucket->weight / winner->divisor;
+        group->hash_map[hash] = winner->bucket;
+    }
+
+    i = 0;
+    LIST_FOR_EACH (bucket, list_node, &group->up.buckets) {
+        double target = (n_hash * bucket->weight) / (double) total_weight;
+        VLOG_DBG("  Bucket %d: weight=%d, target=%.2f hits=%d",
+                 bucket->bucket_id, bucket->weight,
+                 target, webster[i].hits);
+        i++;
+    }
+
+    free(webster);
+    return true;
+}
+
+static void
+group_set_selection_method(struct group_dpif *group)
+{
+    const struct ofputil_group_props *props = &group->up.props;
+    const char *selection_method = props->selection_method;
+
+    VLOG_DBG("Constructing select group %"PRIu32, group->up.group_id);
+    if (selection_method[0] == '\0') {
+        VLOG_DBG("No selection method specified. Trying dp_hash.");
+        /* If the controller has not specified a selection method, check if
+         * the dp_hash selection method with max 64 hash values is appropriate
+         * for the given bucket configuration. */
+        if (group_setup_dp_hash_table(group, 64)) {
+            /* Use dp_hash selection method with symmetric L4 hash. */
+            group->selection_method = SEL_METHOD_DP_HASH;
+            group->hash_alg = OVS_HASH_ALG_SYM_L4;
+            group->hash_basis = 0;
+            VLOG_DBG("Use dp_hash with %d hash values using algorithm %d.",
+                     group->hash_mask + 1, group->hash_alg);
+        } else {
+            /* Fall back to original default hashing in slow path. */
+            VLOG_DBG("Falling back to default hash method.");
+            group->selection_method = SEL_METHOD_DEFAULT;
+        }
+    } else if (!strcmp(selection_method, "dp_hash")) {
+        VLOG_DBG("Selection method specified: dp_hash.");
+        /* Try to use dp_hash if possible at all. */
+        if (group_setup_dp_hash_table(group, 0)) {
+            group->selection_method = SEL_METHOD_DP_HASH;
+            group->hash_alg = props->selection_method_param >> 32;
+            if (group->hash_alg >= __OVS_HASH_MAX) {
+                VLOG_DBG("Invalid dp_hash algorithm %d. "
+                         "Defaulting to OVS_HASH_ALG_L4", group->hash_alg);
+                group->hash_alg = OVS_HASH_ALG_L4;
+            }
+            group->hash_basis = (uint32_t) props->selection_method_param;
+            VLOG_DBG("Use dp_hash with %d hash values using algorithm %d.",
+                     group->hash_mask + 1, group->hash_alg);
+        } else {
+            /* Fall back to original default hashing in slow path. */
+            VLOG_DBG("Falling back to default hash method.");
+            group->selection_method = SEL_METHOD_DEFAULT;
+        }
+    } else if (!strcmp(selection_method, "hash")) {
+        VLOG_DBG("Selection method specified: hash.");
+        if (props->fields.values_size > 0) {
+            /* Controller has specified hash fields. */
+            struct ds s = DS_EMPTY_INITIALIZER;
+            oxm_format_field_array(&s, &props->fields);
+            VLOG_DBG("Hash fields: %s", ds_cstr(&s));
+            ds_destroy(&s);
+            group->selection_method = SEL_METHOD_HASH;
+        } else {
+            /* No hash fields. Fall back to original default hashing. */
+            VLOG_DBG("No hash fields. Falling back to default hash method.");
+            group->selection_method = SEL_METHOD_DEFAULT;
+        }
+    } else {
+        /* Parsing of groups should ensure this never happens */
+        OVS_NOT_REACHED();
+    }
+}
+
 static enum ofperr
 group_construct(struct ofgroup *group_)
 {
@@ -4725,6 +4926,10 @@ group_construct(struct ofgroup *group_)
     ovs_mutex_init_adaptive(&group->stats_mutex);
     ovs_mutex_lock(&group->stats_mutex);
     group_construct_stats(group);
+    group->hash_map = NULL;
+    if (group->up.type == OFPGT11_SELECT) {
+        group_set_selection_method(group);
+    }
     ovs_mutex_unlock(&group->stats_mutex);
     return 0;
 }
@@ -4734,6 +4939,10 @@ group_destruct(struct ofgroup *group_)
 {
     struct group_dpif *group = group_dpif_cast(group_);
     ovs_mutex_destroy(&group->stats_mutex);
+    if (group->hash_map) {
+        free(group->hash_map);
+        group->hash_map = NULL;
+    }
 }
 
 static enum ofperr

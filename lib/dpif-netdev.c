@@ -3061,19 +3061,19 @@ dpif_netdev_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops)
 
         switch (op->type) {
         case DPIF_OP_FLOW_PUT:
-            op->error = dpif_netdev_flow_put(dpif, &op->u.flow_put);
+            op->error = dpif_netdev_flow_put(dpif, &op->flow_put);
             break;
 
         case DPIF_OP_FLOW_DEL:
-            op->error = dpif_netdev_flow_del(dpif, &op->u.flow_del);
+            op->error = dpif_netdev_flow_del(dpif, &op->flow_del);
             break;
 
         case DPIF_OP_EXECUTE:
-            op->error = dpif_netdev_execute(dpif, &op->u.execute);
+            op->error = dpif_netdev_execute(dpif, &op->execute);
             break;
 
         case DPIF_OP_FLOW_GET:
-            op->error = dpif_netdev_flow_get(dpif, &op->u.flow_get);
+            op->error = dpif_netdev_flow_get(dpif, &op->flow_get);
             break;
         }
     }
@@ -3481,8 +3481,6 @@ port_reconfigure(struct dp_netdev_port *port)
     struct netdev *netdev = port->netdev;
     int i, err;
 
-    port->need_reconfigure = false;
-
     /* Closes the existing 'rxq's. */
     for (i = 0; i < port->n_rxq; i++) {
         netdev_rxq_close(port->rxqs[i].rx);
@@ -3492,7 +3490,7 @@ port_reconfigure(struct dp_netdev_port *port)
     port->n_rxq = 0;
 
     /* Allows 'netdev' to apply the pending configuration changes. */
-    if (netdev_is_reconf_required(netdev)) {
+    if (netdev_is_reconf_required(netdev) || port->need_reconfigure) {
         err = netdev_reconfigure(netdev);
         if (err && (err != EOPNOTSUPP)) {
             VLOG_ERR("Failed to set interface %s new configuration",
@@ -3525,6 +3523,9 @@ port_reconfigure(struct dp_netdev_port *port)
 
     /* Parse affinity list to apply configuration for new queues. */
     dpif_netdev_port_set_rxq_affinity(port, port->rxq_affinity_list);
+
+    /* If reconfiguration was successful mark it as such, so we can use it */
+    port->need_reconfigure = false;
 
     return 0;
 }
@@ -5673,12 +5674,16 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
         break;
 
     case OVS_ACTION_ATTR_TUNNEL_PUSH:
-        if (*depth < MAX_RECIRC_DEPTH) {
-            dp_packet_batch_apply_cutlen(packets_);
-            push_tnl_action(pmd, a, packets_);
-            return;
+        if (should_steal) {
+            /* We're requested to push tunnel header, but also we need to take
+             * the ownership of these packets. Thus, we can avoid performing
+             * the action, because the caller will not use the result anyway.
+             * Just break to free the batch. */
+            break;
         }
-        break;
+        dp_packet_batch_apply_cutlen(packets_);
+        push_tnl_action(pmd, a, packets_);
+        return;
 
     case OVS_ACTION_ATTR_TUNNEL_POP:
         if (*depth < MAX_RECIRC_DEPTH) {

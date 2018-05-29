@@ -1809,12 +1809,12 @@ cmd_show_row(struct ctl_context *ctx, const struct ovsdb_idl_row *row,
 
         datum = ovsdb_idl_read(row, column);
         if (column->type.key.type == OVSDB_TYPE_UUID &&
-            column->type.key.u.uuid.refTableName) {
+            column->type.key.uuid.refTableName) {
             const struct cmd_show_table *ref_show;
             size_t j;
 
             ref_show = cmd_show_find_table_by_name(
-                column->type.key.u.uuid.refTableName);
+                column->type.key.uuid.refTableName);
             if (ref_show) {
                 for (j = 0; j < datum->n; j++) {
                     const struct ovsdb_idl_row *ref_row;
@@ -1830,14 +1830,14 @@ cmd_show_row(struct ctl_context *ctx, const struct ovsdb_idl_row *row,
             }
         } else if (ovsdb_type_is_map(&column->type) &&
                    column->type.value.type == OVSDB_TYPE_UUID &&
-                   column->type.value.u.uuid.refTableName) {
+                   column->type.value.uuid.refTableName) {
             const struct cmd_show_table *ref_show;
             size_t j;
 
             /* Prints the key to ref'ed table name map if the ref'ed table
              * is also defined in 'cmd_show_tables'.  */
             ref_show = cmd_show_find_table_by_name(
-                column->type.value.u.uuid.refTableName);
+                column->type.value.uuid.refTableName);
             if (ref_show && ref_show->name_column) {
                 ds_put_char_multiple(&ctx->output, ' ', (level + 1) * 4);
                 ds_put_format(&ctx->output, "%s:\n", column->name);
@@ -2046,12 +2046,10 @@ ctl_default_db(void)
  * database, otherwise false.  (Not very smart, so it's prone to false
  * positives.) */
 bool
-ctl_might_write_to_db(char **argv)
+ctl_might_write_to_db(const struct ctl_command *commands, size_t n)
 {
-    for (; *argv; argv++) {
-        const struct ctl_command_syntax *p = shash_find_data(&all_commands,
-                                                             *argv);
-        if (p && p->mode == RW) {
+    for (size_t i = 0; i < n; i++) {
+        if (commands[i].syntax->mode == RW) {
             return true;
         }
     }
