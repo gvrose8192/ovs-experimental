@@ -328,6 +328,7 @@ Timo Puha                          timox.puha@intel.com
 Timothy Redaelli                   tredaelli@redhat.com
 Todd Deshane                       deshantm@gmail.com
 Tom Everman                        teverman@google.com
+Toms Atteka                        cpp.code.lv@gmail.com
 Torgny Lindberg                    torgny.lindberg@ericsson.com
 Tsvi Slonim                        tsvi@toroki.com
 Tuan Nguyen                        tuan.nguyen@veriksystems.com
@@ -430,6 +431,7 @@ Darragh O'Reilly                darragh.oreilly@hpe.com
 Dave Walker                     DaveWalker@ubuntu.com
 David Evans                     davidjoshuaevans@gmail.com
 David Palma                     palma@onesource.pt
+David van Moolenbroek           dvmoolenbroek@aimvalley.nl
 Derek Cormier                   derek.cormier@lab.ntt.co.jp
 Dhaval Badiani                  dbadiani@vmware.com
 DK Moon                         dkmoon@nicira.com
