@@ -20,16 +20,10 @@
 #include "simap.h"
 #include "ovn/lib/ovn-sb-idl.h"
 
+struct ovsrec_bridge_table;
+
 /* Linux supports a maximum of 64K zones, which seems like a fine default. */
 #define MAX_CT_ZONES 65535
-
-struct controller_ctx {
-    struct ovsdb_idl *ovnsb_idl;
-    struct ovsdb_idl_txn *ovnsb_idl_txn;
-
-    struct ovsdb_idl *ovs_idl;
-    struct ovsdb_idl_txn *ovs_idl_txn;
-};
 
 /* States to move through when a new conntrack zone has been allocated. */
 enum ct_zone_pending_state {
@@ -73,11 +67,8 @@ struct local_datapath {
 struct local_datapath *get_local_datapath(const struct hmap *,
                                           uint32_t tunnel_key);
 
-const struct ovsrec_bridge *get_bridge(struct ovsdb_idl *,
+const struct ovsrec_bridge *get_bridge(const struct ovsrec_bridge_table *,
                                        const char *br_name);
-
-const struct sbrec_chassis *get_chassis(struct ovsdb_idl *,
-                                        const char *chassis_id);
 
 /* Must be a bit-field ordered from most-preferred (higher number) to
  * least-preferred (lower number). */
