@@ -25,8 +25,11 @@
 #    - ovs_dump_dp_netdev [ports]
 #    - ovs_dump_dp_netdev_poll_threads <struct dp_netdev *>
 #    - ovs_dump_dp_netdev_ports <struct dp_netdev *>
+#    - ovs_dump_dp_provider
 #    - ovs_dump_netdev
+#    - ovs_dump_netdev_provider
 #    - ovs_dump_ovs_list <struct ovs_list *> {[<structure>] [<member>] {dump}]}
+#    - ovs_dump_simap <struct simap *>
 #
 #  Example:
 #    $ gdb $(which ovs-vswitchd) $(pidof ovs-vswitchd)
@@ -103,6 +106,15 @@ def offset_of(typeobj, field):
 def container_of(ptr, typeobj, member):
     return (ptr.cast(get_long_type()) -
             offset_of(typeobj, member)).cast(typeobj)
+
+
+def get_global_variable(name):
+    var = gdb.lookup_symbol(name)[0]
+    if var is None or not var.is_variable:
+        print("Can't find {} global variable, are you sure "
+              "your debugging OVS?".format(name))
+        return None
+    return gdb.parse_and_eval(name)
 
 
 #
@@ -230,6 +242,19 @@ class ForEachSHASH(ForEachHMAP):
 
 
 #
+# Class that will provide an iterator over an OVS simap.
+#
+class ForEachSIMAP(ForEachHMAP):
+    def __init__(self, shash):
+        super(ForEachSIMAP, self).__init__(shash['map'],
+                                           "struct simap_node", "node")
+
+    def next(self):
+        node = super(ForEachSIMAP, self).next()
+        return node['name'], node['data']
+
+
+#
 # Class that will provide an iterator over an OVS list.
 #
 class ForEachLIST():
@@ -282,12 +307,10 @@ class CmdDumpBridge(gdb.Command):
             else:
                 wanted = True
 
-        dp_netdevs = gdb.lookup_symbol('all_bridges')[0]
-        if dp_netdevs is None or not dp_netdevs.is_variable:
-            print("Can't find all_bridges global variable, are you sure "
-                  "your debugging OVS?")
+        all_bridges = get_global_variable('all_bridges')
+        if all_bridges is None:
             return
-        all_bridges = gdb.parse_and_eval('all_bridges')
+
         for node in ForEachHMAP(all_bridges,
                                 "struct bridge", "node"):
             print("(struct bridge *) {}: name = {}, type = {}".
@@ -366,19 +389,15 @@ class CmdDumpDpNetdev(gdb.Command):
         elif len(arg_list) == 1:
             ports = True
 
-        dp_netdevs = gdb.lookup_symbol('dp_netdevs')[0]
-        if dp_netdevs is None or not dp_netdevs.is_variable:
-            print("Can't find dp_netdevs global variable, are you sure "
-                  "your debugging OVS?")
+        dp_netdevs = get_global_variable('dp_netdevs')
+        if dp_netdevs is None:
             return
-        dp_netdevs = gdb.parse_and_eval('dp_netdevs')
-        for node in ForEachSHASH(dp_netdevs):
-            dp = node['data'].cast(
-                gdb.lookup_type('struct dp_netdev').pointer())
+
+        for dp in ForEachSHASH(dp_netdevs, typeobj=('struct dp_netdev')):
 
             print("(struct dp_netdev *) {}: name = {}, class = "
                   "(struct dpif_class *) {}".
-                  format(dp, dp['name'], dp['class']))
+                  format(dp, dp['name'].string(), dp['class']))
 
             if ports:
                 for node in ForEachHMAP(dp['ports'],
@@ -458,6 +477,34 @@ class CmdDumpDpNetdevPorts(gdb.Command):
 
 
 #
+# Implements the GDB "ovs_dump_dp_provider" command
+#
+class CmdDumpDpProvider(gdb.Command):
+    """Dump all registered registered_dpif_class structures.
+    Usage: ovs_dump_dp_provider
+    """
+    def __init__(self):
+        super(CmdDumpDpProvider, self).__init__("ovs_dump_dp_provider",
+                                                gdb.COMMAND_DATA)
+
+    def invoke(self, arg, from_tty):
+        dp_providers = get_global_variable('dpif_classes')
+        if dp_providers is None:
+            return
+
+        for dp_class in ForEachSHASH(dp_providers,
+                                     typeobj="struct registered_dpif_class"):
+
+            print("(struct registered_dpif_class *) {}: "
+                  "(struct dpif_class *) 0x{:x} = {{type = {}, ...}}, "
+                  "refcount = {}".
+                  format(dp_class,
+                         long(dp_class['dpif_class']),
+                         dp_class['dpif_class']['type'].string(),
+                         dp_class['refcount']))
+
+
+#
 # Implements the GDB "ovs_dump_netdev" command
 #
 class CmdDumpNetdev(gdb.Command):
@@ -477,14 +524,72 @@ class CmdDumpNetdev(gdb.Command):
                      netdev['auto_classified'], netdev['netdev_class']))
 
     def invoke(self, arg, from_tty):
-        netdev_shash = gdb.lookup_symbol('netdev_shash')[0]
-        if netdev_shash is None or not netdev_shash.is_variable:
-            print("Can't find netdev_shash global variable, are you sure "
-                  "your debugging OVS?")
+        netdev_shash = get_global_variable('netdev_shash')
+        if netdev_shash is None:
             return
-        netdev_shash = gdb.parse_and_eval('netdev_shash')
+
         for netdev in ForEachSHASH(netdev_shash, "struct netdev"):
             self.display_single_netdev(netdev)
+
+
+#
+# Implements the GDB "ovs_dump_netdev_provider" command
+#
+class CmdDumpNetdevProvider(gdb.Command):
+    """Dump all registered netdev providers.
+    Usage: ovs_dump_netdev_provider
+    """
+    def __init__(self):
+        super(CmdDumpNetdevProvider, self).__init__("ovs_dump_netdev_provider",
+                                                    gdb.COMMAND_DATA)
+
+    @staticmethod
+    def is_class_vport_class(netdev_class):
+        netdev_class = netdev_class.cast(
+            gdb.lookup_type('struct netdev_class').pointer())
+
+        vport_construct = gdb.lookup_symbol('netdev_vport_construct')[0]
+
+        if netdev_class['construct'] == vport_construct.value():
+            return True
+        return False
+
+    @staticmethod
+    def display_single_netdev_provider(reg_class, indent=0):
+        indent = " " * indent
+        print("{}(struct netdev_registered_class *) {}: refcnt = {},".
+              format(indent, reg_class, reg_class['refcnt']))
+
+        print("{}    (struct netdev_class *) 0x{:x} = {{type = {}, "
+              "is_pmd = {}, ...}}, ".
+              format(indent, long(reg_class['class']),
+                     reg_class['class']['type'].string(),
+                     reg_class['class']['is_pmd']))
+
+        if CmdDumpNetdevProvider.is_class_vport_class(reg_class['class']):
+            vport = container_of(
+                reg_class['class'],
+                gdb.lookup_type('struct vport_class').pointer(),
+                'netdev_class')
+
+            if vport['dpif_port'] != 0:
+                dpif_port = vport['dpif_port'].string()
+            else:
+                dpif_port = "\"\""
+
+            print("{}    (struct vport_class *) 0x{:x} = "
+                  "{{ dpif_port = {}, ... }}".
+                  format(indent, long(vport), dpif_port))
+
+    def invoke(self, arg, from_tty):
+        netdev_classes = get_global_variable('netdev_classes')
+        if netdev_classes is None:
+            return
+
+        for reg_class in ForEachCMAP(netdev_classes,
+                                     "struct netdev_registered_class",
+                                     "cmap_node"):
+            self.display_single_netdev_provider(reg_class)
 
 
 #
@@ -561,6 +666,41 @@ class CmdDumpOvsList(gdb.Command):
 
 
 #
+# Implements the GDB "ovs_dump_simap" command
+#
+class CmdDumpSimap(gdb.Command):
+    """Dump all nodes of an ovs_list give
+    Usage: ovs_dump_ovs_list <struct simap *>
+    """
+
+    def __init__(self):
+        super(CmdDumpSimap, self).__init__("ovs_dump_simap",
+                                           gdb.COMMAND_DATA)
+
+    def invoke(self, arg, from_tty):
+        arg_list = gdb.string_to_argv(arg)
+
+        if len(arg_list) != 1:
+            print("ERROR: Missing argument!\n")
+            print(self.__doc__)
+            return
+
+        simap = gdb.parse_and_eval(arg_list[0]).cast(
+            gdb.lookup_type('struct simap').pointer())
+
+        values = dict()
+        max_name_len = 0
+        for name, value in ForEachSIMAP(simap.dereference()):
+            values[name.string()] = long(value)
+            if len(name.string()) > max_name_len:
+                max_name_len = len(name.string())
+
+        for name in sorted(values.iterkeys()):
+            print("{}: {} / 0x{:x}".format(name.ljust(max_name_len),
+                                           values[name], values[name]))
+
+
+#
 # Initialize all GDB commands
 #
 CmdDumpBridge()
@@ -568,5 +708,8 @@ CmdDumpBridgePorts()
 CmdDumpDpNetdev()
 CmdDumpDpNetdevPollThreads()
 CmdDumpDpNetdevPorts()
+CmdDumpDpProvider()
 CmdDumpNetdev()
+CmdDumpNetdevProvider()
 CmdDumpOvsList()
+CmdDumpSimap()

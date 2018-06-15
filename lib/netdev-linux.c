@@ -587,7 +587,13 @@ netdev_linux_netnsid_update__(struct netdev_linux *netdev)
 
     error = dpif_netlink_vport_get(netdev_get_name(&netdev->up), &reply, &buf);
     if (error) {
-        netnsid_unset(&netdev->netnsid);
+        if (error == ENOENT) {
+            /* Assume it is local if there is no API (e.g. if the openvswitch
+             * kernel module is not loaded). */
+            netnsid_set_local(&netdev->netnsid);
+        } else {
+            netnsid_unset(&netdev->netnsid);
+        }
         return error;
     }
 
@@ -600,7 +606,11 @@ static int
 netdev_linux_netnsid_update(struct netdev_linux *netdev)
 {
     if (netnsid_is_unset(netdev->netnsid)) {
-        return netdev_linux_netnsid_update__(netdev);
+        if (netdev_get_class(&netdev->up) == &netdev_tap_class) {
+            netnsid_set_local(&netdev->netnsid);
+        } else {
+            return netdev_linux_netnsid_update__(netdev);
+        }
     }
 
     return 0;
@@ -940,6 +950,7 @@ netdev_linux_construct_tap(struct netdev *netdev_)
         goto error_close;
     }
 
+    netdev->present = true;
     return 0;
 
 error_close:
