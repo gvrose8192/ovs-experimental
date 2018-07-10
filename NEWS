@@ -1,5 +1,7 @@
 Post-v2.9.0
 --------------------
+   - ovs-vswitchd and utilities now support DNS names in OpenFlow and
+     OVSDB remotes.
    - ovs-vswitchd:
      * New options --l7 and --l7-len to "ofproto/trace" command.
      * Previous versions gave OpenFlow tables default names of the form
@@ -23,7 +25,7 @@ Post-v2.9.0
      * Add support for compiling OVS with the latest Linux 4.14 kernel.
      * Added support for meters.
    - ovn:
-     * implemented icmp4/icmp6/tcp_reset actions in order to drop the packet
+     * Implemented icmp4/icmp6/tcp_reset actions in order to drop the packet
        and reply with a RST for TCP or ICMPv4/ICMPv6 unreachable message for
        other IPv4/IPv6-based protocols whenever a reject ACL rule is hit.
      * ACL match conditions can now match on Port_Groups as well as address
@@ -34,6 +36,8 @@ Post-v2.9.0
        See Testing topic for the details.
      * Add LSC interrupt support for DPDK physical devices.
      * Allow init to fail and record DPDK status/version in OVS database.
+     * Add experimental flow hardware offload support
+     * Support both shared and per port mempools for DPDK devices.
    - Userspace datapath:
      * Commands ovs-appctl dpif-netdev/pmd-*-show can now work on a single PMD
      * Detailed PMD performance metrics available with new command
@@ -81,6 +85,7 @@ v2.9.0 - 19 Feb 2018
        - Added support to generate Neighbor Solicitation packets using the OVN
          action 'nd_ns' to resolve unknown next hop MAC addresses for the
          IPv6 packets.
+     * Add support for QoS bandwidth limit with DPDK.
      * ovn-ctl: New commands run_nb_ovsdb and run_sb_ovsdb.
      * ovn-sbctl, ovn-nbctl: New options --leader-only, --no-leader-only.
    - OpenFlow:
@@ -110,7 +115,7 @@ v2.9.0 - 19 Feb 2018
      * New appctl command 'dpif-netdev/pmd-rxq-rebalance' to rebalance rxq to
        pmd assignments.
      * Add rxq utilization of pmd to appctl 'dpif-netdev/pmd-rxq-show'.
-     * Add support for vHost dequeue zero copy (experimental)
+     * Add support for vHost dequeue zero copy (experimental).
    - Userspace datapath:
      * Output packet batching support.
    - vswitchd:
@@ -175,7 +180,6 @@ v2.8.0 - 31 Aug 2017
        gateway.
      * Add support for ACL logging.
      * ovn-northd now has native support for active-standby high availability.
-     * Add support for QoS bandwidth limt with DPDK.
    - Tracing with ofproto/trace now traces through recirculation.
    - OVSDB:
      * New support for role-based access control (see ovsdb-server(1)).
