@@ -178,31 +178,31 @@ dnl Configure Linux tc compat.
 AC_DEFUN([OVS_CHECK_LINUX_TC], [
   AC_COMPILE_IFELSE([
     AC_LANG_PROGRAM([#include <linux/pkt_cls.h>], [
-        int x = TCA_FLOWER_KEY_CVLAN_PRIO;
+        int x = TCA_FLOWER_KEY_ENC_IP_TTL_MASK;
     ])],
-    [AC_DEFINE([HAVE_TCA_FLOWER_KEY_CVLAN_PRIO], [1],
-               [Define to 1 if TCA_FLOWER_KEY_CVLAN_PRIO is avaiable.])])
+    [AC_DEFINE([HAVE_TCA_FLOWER_KEY_ENC_IP_TTL_MASK], [1],
+               [Define to 1 if TCA_FLOWER_KEY_ENC_IP_TTL_MASK is available.])])
 
   AC_COMPILE_IFELSE([
     AC_LANG_PROGRAM([#include <linux/tc_act/tc_vlan.h>], [
         int x = TCA_VLAN_PUSH_VLAN_PRIORITY;
     ])],
     [AC_DEFINE([HAVE_TCA_VLAN_PUSH_VLAN_PRIORITY], [1],
-               [Define to 1 if TCA_VLAN_PUSH_VLAN_PRIORITY is avaiable.])])
+               [Define to 1 if TCA_VLAN_PUSH_VLAN_PRIORITY is available.])])
 
   AC_COMPILE_IFELSE([
     AC_LANG_PROGRAM([#include <linux/tc_act/tc_tunnel_key.h>], [
-        int x = TCA_TUNNEL_KEY_ENC_DST_PORT;
+        int x = TCA_TUNNEL_KEY_ENC_TTL;
     ])],
-    [AC_DEFINE([HAVE_TCA_TUNNEL_KEY_ENC_DST_PORT], [1],
-               [Define to 1 if TCA_TUNNEL_KEY_ENC_DST_PORT is avaiable.])])
+    [AC_DEFINE([HAVE_TCA_TUNNEL_KEY_ENC_TTL], [1],
+               [Define to 1 if TCA_TUNNEL_KEY_ENC_TTL is available.])])
 
   AC_COMPILE_IFELSE([
     AC_LANG_PROGRAM([#include <linux/tc_act/tc_pedit.h>], [
         int x = TCA_PEDIT_KEY_EX_HDR_TYPE_UDP;
     ])],
     [AC_DEFINE([HAVE_TCA_PEDIT_KEY_EX_HDR_TYPE_UDP], [1],
-               [Define to 1 if TCA_PEDIT_KEY_EX_HDR_TYPE_UDP is avaiable.])])
+               [Define to 1 if TCA_PEDIT_KEY_EX_HDR_TYPE_UDP is available.])])
 ])
 
 dnl OVS_CHECK_DPDK
@@ -619,6 +619,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                         [nf_conn_labels], [words])
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_nat.h], [nf_ct_nat_ext_add])
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_nat.h], [nf_nat_alloc_null_binding])
+  OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_nat.h], [nf_nat_range2])
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_seqadj.h], [nf_ct_seq_adjust])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/random.h], [prandom_u32])
@@ -634,6 +635,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [OVS_GREP_IFELSE([$KSRC/include/linux/rtnetlink.h],
                                    [rcu_read_lock_held])])
   OVS_GREP_IFELSE([$KSRC/include/linux/rtnetlink.h], [lockdep_rtnl_is_held])
+  OVS_GREP_IFELSE([$KSRC/include/linux/rtnetlink.h], [net_rwsem])
 
   # Check for the proto_data_valid member in struct sk_buff.  The [^@]
   # is necessary because some versions of this header remove the

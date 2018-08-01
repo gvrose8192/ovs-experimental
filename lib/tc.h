@@ -95,6 +95,7 @@ struct tc_flower_key {
 
     uint8_t flags;
     uint8_t ip_ttl;
+    uint8_t ip_tos;
 
     struct {
         ovs_be32 ipv4_src;
@@ -129,6 +130,8 @@ struct tc_action {
             ovs_be64 id;
             ovs_be16 tp_src;
             ovs_be16 tp_dst;
+            uint8_t tos;
+            uint8_t ttl;
             struct {
                 ovs_be32 ipv4_src;
                 ovs_be32 ipv4_dst;
@@ -180,9 +183,11 @@ struct tc_flower {
             struct in6_addr ipv6_src;
             struct in6_addr ipv6_dst;
         } ipv6;
-        ovs_be64 id;
+        uint8_t tos;
+        uint8_t ttl;
         ovs_be16 tp_src;
         ovs_be16 tp_dst;
+        ovs_be64 id;
     } tunnel;
 
     struct tc_cookie act_cookie;

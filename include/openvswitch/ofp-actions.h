@@ -287,6 +287,8 @@ struct ofpact_output {
     uint16_t max_len;           /* Max send len, for port OFPP_CONTROLLER. */
 };
 
+#define NX_CTLR_NO_METER 0
+
 /* OFPACT_CONTROLLER.
  *
  * Used for NXAST_CONTROLLER. */
@@ -305,6 +307,12 @@ struct ofpact_controller {
         /* Arbitrary data to include in the packet-in message (currently,
          * only in NXT_PACKET_IN2). */
         uint16_t userdata_len;
+
+        /* Meter to which this controller action should be associated.
+         * If requested, this will override a "controller" virtual meter.
+         * A value of NX_CTLR_NO_METER means no meter is requested. */
+        uint32_t meter_id;
+        uint32_t provider_meter_id;
     );
     uint8_t userdata[0];
 };
@@ -1029,14 +1037,22 @@ ofpacts_pull_openflow_instructions(struct ofpbuf *openflow,
                                    const struct vl_mff_map *vl_mff_map,
                                    uint64_t *ofpacts_tlv_bitmap,
                                    struct ofpbuf *ofpacts);
+
+struct ofpact_check_params {
+    /* Input. */
+    struct match *match;
+    ofp_port_t max_ports;
+    uint8_t table_id;
+    uint8_t n_tables;
+
+    /* Output. */
+    enum ofputil_protocol usable_protocols;
+};
 enum ofperr ofpacts_check(struct ofpact[], size_t ofpacts_len,
-                          struct match *, ofp_port_t max_ports,
-                          uint8_t table_id, uint8_t n_tables,
-                          enum ofputil_protocol *usable_protocols);
+                          struct ofpact_check_params *);
 enum ofperr ofpacts_check_consistency(struct ofpact[], size_t ofpacts_len,
-                                      struct match *, ofp_port_t max_ports,
-                                      uint8_t table_id, uint8_t n_tables,
-                                      enum ofputil_protocol usable_protocols);
+                                      enum ofputil_protocol needed_protocols,
+                                      struct ofpact_check_params *);
 enum ofperr ofpact_check_output_port(ofp_port_t port, ofp_port_t max_ports);
 
 /* Converting ofpacts to OpenFlow. */

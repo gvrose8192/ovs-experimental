@@ -1080,10 +1080,9 @@ dpif_flow_del(struct dpif *dpif,
  * This function always successfully returns a dpif_flow_dump.  Error
  * reporting is deferred to dpif_flow_dump_destroy(). */
 struct dpif_flow_dump *
-dpif_flow_dump_create(const struct dpif *dpif, bool terse,
-                      struct dpif_flow_dump_types *types)
+dpif_flow_dump_create(const struct dpif *dpif, bool terse, char *type)
 {
-    return dpif->dpif_class->flow_dump_create(dpif, terse, types);
+    return dpif->dpif_class->flow_dump_create(dpif, terse, type);
 }
 
 /* Destroys 'dump', which must have been created with dpif_flow_dump_create().
@@ -1896,11 +1895,27 @@ int
 dpif_meter_set(struct dpif *dpif, ofproto_meter_id *meter_id,
                struct ofputil_meter_config *config)
 {
-    int error;
-
     COVERAGE_INC(dpif_meter_set);
 
-    error = dpif->dpif_class->meter_set(dpif, meter_id, config);
+    if (!(config->flags & (OFPMF13_KBPS | OFPMF13_PKTPS))) {
+        return EBADF; /* Rate unit type not set. */
+    }
+
+    if ((config->flags & OFPMF13_KBPS) && (config->flags & OFPMF13_PKTPS)) {
+        return EBADF; /* Both rate units may not be set. */
+    }
+
+    if (config->n_bands == 0) {
+        return EINVAL;
+    }
+
+    for (size_t i = 0; i < config->n_bands; i++) {
+        if (config->bands[i].rate == 0) {
+            return EDOM; /* Rate must be non-zero */
+        }
+    }
+
+    int error = dpif->dpif_class->meter_set(dpif, meter_id, config);
     if (!error) {
         VLOG_DBG_RL(&dpmsg_rl, "%s: DPIF meter %"PRIu32" set",
                     dpif_name(dpif), meter_id->uint32);

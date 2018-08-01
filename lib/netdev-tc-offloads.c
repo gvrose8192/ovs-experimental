@@ -455,6 +455,7 @@ parse_tc_flower_to_match(struct tc_flower *flower,
             match_set_nw_proto(match, key->ip_proto);
         }
 
+        match_set_nw_tos_masked(match, key->ip_tos, mask->ip_tos);
         match_set_nw_ttl_masked(match, key->ip_ttl, mask->ip_ttl);
 
         if (mask->flags) {
@@ -509,6 +510,12 @@ parse_tc_flower_to_match(struct tc_flower *flower,
             match_set_tun_ipv6_src(match, &flower->tunnel.ipv6.ipv6_src);
             match_set_tun_ipv6_dst(match, &flower->tunnel.ipv6.ipv6_dst);
         }
+        if (flower->tunnel.tos) {
+            match_set_tun_tos(match, flower->tunnel.tos);
+        }
+        if (flower->tunnel.ttl) {
+            match_set_tun_ttl(match, flower->tunnel.ttl);
+        }
         if (flower->tunnel.tp_dst) {
             match_set_tun_tp_dst(match, flower->tunnel.tp_dst);
         }
@@ -561,6 +568,14 @@ parse_tc_flower_to_match(struct tc_flower *flower,
                                   sizeof action->encap.ipv6.ipv6_dst)) {
                     nl_msg_put_in6_addr(buf, OVS_TUNNEL_KEY_ATTR_IPV6_DST,
                                         &action->encap.ipv6.ipv6_dst);
+                }
+                if (action->encap.tos) {
+                    nl_msg_put_u8(buf, OVS_TUNNEL_KEY_ATTR_TOS,
+                                  action->encap.tos);
+                }
+                if (action->encap.ttl) {
+                    nl_msg_put_u8(buf, OVS_TUNNEL_KEY_ATTR_TTL,
+                                  action->encap.ttl);
                 }
                 nl_msg_put_be16(buf, OVS_TUNNEL_KEY_ATTR_TP_DST,
                                 action->encap.tp_dst);
@@ -743,6 +758,14 @@ parse_put_flow_set_action(struct tc_flower *flower, struct tc_action *action,
         break;
         case OVS_TUNNEL_KEY_ATTR_IPV4_DST: {
             action->encap.ipv4.ipv4_dst = nl_attr_get_be32(tun_attr);
+        }
+        break;
+        case OVS_TUNNEL_KEY_ATTR_TOS: {
+            action->encap.tos = nl_attr_get_u8(tun_attr);
+        }
+        break;
+        case OVS_TUNNEL_KEY_ATTR_TTL: {
+            action->encap.ttl = nl_attr_get_u8(tun_attr);
         }
         break;
         case OVS_TUNNEL_KEY_ATTR_IPV6_SRC: {
@@ -946,6 +969,8 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
         flower.tunnel.ipv4.ipv4_dst = tnl->ip_dst;
         flower.tunnel.ipv6.ipv6_src = tnl->ipv6_src;
         flower.tunnel.ipv6.ipv6_dst = tnl->ipv6_dst;
+        flower.tunnel.tos = tnl->ip_tos;
+        flower.tunnel.ttl = tnl->ip_ttl;
         flower.tunnel.tp_src = tnl->tp_src;
         flower.tunnel.tp_dst = tnl->tp_dst;
         flower.tunnel.tunnel = true;
@@ -1025,8 +1050,13 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
     if (is_ip_any(key)) {
         flower.key.ip_proto = key->nw_proto;
         flower.mask.ip_proto = mask->nw_proto;
+        mask->nw_proto = 0;
+        flower.key.ip_tos = key->nw_tos;
+        flower.mask.ip_tos = mask->nw_tos;
+        mask->nw_tos = 0;
         flower.key.ip_ttl = key->nw_ttl;
         flower.mask.ip_ttl = mask->nw_ttl;
+        mask->nw_ttl = 0;
 
         if (mask->nw_frag & FLOW_NW_FRAG_ANY) {
             flower.mask.flags |= TCA_FLOWER_KEY_FLAGS_IS_FRAGMENT;
@@ -1071,10 +1101,6 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
             mask->tp_src = 0;
             mask->tp_dst = 0;
         }
-
-        mask->nw_tos = 0;
-        mask->nw_proto = 0;
-        mask->nw_ttl = 0;
 
         if (key->dl_type == htons(ETH_P_IP)) {
             flower.key.ipv4.ipv4_src = key->nw_src;

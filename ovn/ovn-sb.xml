@@ -1761,6 +1761,15 @@
               The verdict for packets matching the flow.  The value must be one
               of <code>allow</code>, <code>deny</code>, or <code>reject</code>.
             </dd>
+            <dt><code>meter=</code><var>string</var></dt>
+            <dd>
+              An optional rate-limiting meter to be applied to the logs.
+              The <var>string</var> should reference a
+              <ref column="name" table="Meter"/> entry from the
+              <ref table="Meter"/> table.  The only meter
+              <ref column="action" table="meter"/> that is appriopriate
+              is <code>drop</code>.
+            </dd>
           </dl>
         </dd>
       </dl>
@@ -1920,6 +1929,80 @@ tcp.flags = RST;
       The logical ports included in the multicast group.  All of these ports
       must be in the <ref column="datapath"/> logical datapath (but the
       database schema cannot enforce this).
+    </column>
+  </table>
+
+  <table name="Meter" title="Meter entry">
+    <p>
+      Each row in this table represents a meter that can be used for QoS or
+      rate-limiting.
+    </p>
+
+    <column name="name">
+      <p>
+        A name for this meter.
+      </p>
+
+      <p>
+        Names that begin with "__" (two underscores) are reserved for
+        OVN internal use and should not be added manually.
+      </p>
+    </column>
+
+    <column name="unit">
+      <p>
+        The unit for <ref column="rate" table="Meter_Band"/> and
+        <ref column="burst_rate" table="Meter_Band"/> parameters in
+        the <ref column="bands"/> entry.  <code>kbps</code> specifies
+        kilobits per second, and <code>pktps</code> specifies packets
+        per second.
+      </p>
+    </column>
+
+    <column name="bands">
+      <p>
+        The bands associated with this meter.  Each band specifies a
+        rate above which the band is to take the action
+        <code>action</code>.  If multiple bands' rates are exceeded,
+        then the band with the highest rate among the exceeded bands is
+        selected.
+      </p>
+    </column>
+  </table>
+
+  <table name="Meter_Band" title="Band for meter entries">
+    <p>
+      Each row in this table represents a meter band which specifies the
+      rate above which the configured action should be applied.  These bands
+      are referenced by the <ref column="bands" table="Meter"/> column in
+      the <ref table="Meter"/> table.
+    </p>
+
+    <column name="action">
+      <p>
+        The action to execute when this band matches.  The only supported
+        action is <code>drop</code>.
+      </p>
+    </column>
+
+    <column name="rate">
+      <p>
+        The rate limit for this band, in kilobits per second or bits per
+        second, depending on whether the parent <ref table="Meter"/>
+        entry's <ref column="unit" table="Meter"/> column specified
+        <code>kbps</code> or <code>pktps</code>.
+      </p>
+    </column>
+
+    <column name="burst_size">
+      <p>
+        The maximum burst allowed for the band in kilobits or packets,
+        depending on whether <code>kbps</code> or <code>pktps</code> was
+        selected in the parent <ref table="Meter"/> entry's
+        <ref column="unit" table="Meter"/> column.  If the size is zero,
+        the switch is free to select some reasonable value depending on
+        its configuration.
+      </p>
     </column>
   </table>
 

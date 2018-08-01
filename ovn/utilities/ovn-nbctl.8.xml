@@ -85,7 +85,7 @@
       must be either <code>switch</code> or <code>port-group</code>.
     </p>
     <dl>
-      <dt>[<code>--type=</code>{<code>switch</code> | <code>port-group</code>}] [<code>--log</code>] [<code>--severity=</code><var>severity</var>] [<code>--name=</code><var>name</var>] [<code>--may-exist</code>] <code>acl-add</code> <var>entity</var> <var>direction</var> <var>priority</var> <var>match</var> <var>verdict</var></dt>
+      <dt>[<code>--type=</code>{<code>switch</code> | <code>port-group</code>}] [<code>--log</code>] [<code>--meter=</code><var>meter</var>] [<code>--severity=</code><var>severity</var>] [<code>--name=</code><var>name</var>] [<code>--may-exist</code>] <code>acl-add</code> <var>entity</var> <var>direction</var> <var>priority</var> <var>match</var> <var>verdict</var></dt>
       <dd>
         <p>
           Adds the specified ACL to <var>entity</var>.  <var>direction</var>
@@ -105,7 +105,9 @@
           logging).  The severity must be one of <code>alert</code>,
           <code>warning</code>, <code>notice</code>, <code>info</code>, or
           <code>debug</code>.  If a severity is not specified, the default is
-          <code>info</code>.
+          <code>info</code>.  The <code>--meter=<var>meter</var></code> option
+          is used to rate-limit packet logging.  The <var>meter</var> argument
+          names a meter configured by <code>meter-add</code>.
         </p>
       </dd>
 
@@ -169,6 +171,59 @@
       <dt><code>qos-list</code> <var>switch</var></dt>
       <dd>
         Lists the QoS rules on <var>switch</var>.
+      </dd>
+    </dl>
+
+    <h1>Meter Commands</h1>
+    <dl>
+        <dt><code>meter-add</code> <var>name</var> <var>action</var> <var>rate</var> <var>unit</var> [<var>burst</var>]</dt>
+      <dd>
+        <p>
+          Adds the specified meter.  <var>name</var> must be a unique
+          name to identify this meter.  The <var>action</var> argument
+          specifies what should happen when this meter is exceeded.
+          The only supported action is <code>drop</code>.
+        </p>
+
+        <p>
+          The <var>unit</var> specifies the unit for the <var>rate</var>
+          argument; valid values are <code>kbps</code> and
+          <code>pktps</code> for kilobits per second and packets per
+          second, respectively.  The <var>burst</var> option
+          configures the maximum burst allowed for the band in kilobits
+          or packets depending on whether the <var>unit</var> chosen was
+          <code>kbps</code> or <code>pktps</code>, respectively.  If a
+          burst is not supplied, the switch is free to select some
+          reasonable value depending on its configuration.
+        </p>
+
+        <p>
+          <code>ovn-nbctl</code> only supports adding a meter with a
+          single band, but the other commands support meters with
+          multiple bands.
+        </p>
+
+        <p>
+          Names that start with "__" (two underscores) are reserved for
+          internal use by OVN, so <code>ovn-nbctl</code> does not allow
+          adding them.
+        </p>
+      </dd>
+
+      <dt><code>meter-del</code> [<var>name</var>]</dt>
+      <dd>
+        <p>
+          Deletes meters.  By default, all meters are deleted.  If
+          <var>name</var> is supplied, only the meter with that name
+          will be deleted.
+      </p>
+      </dd>
+
+      <dt><code>meter-list</code></dt>
+      <dd>
+        <p>
+          Lists all meters.
+        </p>
       </dd>
     </dl>
 

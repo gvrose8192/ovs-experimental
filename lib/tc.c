@@ -302,6 +302,10 @@ static const struct nl_policy tca_flower_policy[] = {
                                 .optional = true, },
     [TCA_FLOWER_KEY_IP_TTL_MASK] = { .type = NL_A_U8,
                                      .optional = true, },
+    [TCA_FLOWER_KEY_IP_TOS] = { .type = NL_A_U8,
+                                .optional = true, },
+    [TCA_FLOWER_KEY_IP_TOS_MASK] = { .type = NL_A_U8,
+                                     .optional = true, },
     [TCA_FLOWER_KEY_TCP_FLAGS] = { .type = NL_A_U16,
                                    .optional = true, },
     [TCA_FLOWER_KEY_TCP_FLAGS_MASK] = { .type = NL_A_U16,
@@ -309,6 +313,14 @@ static const struct nl_policy tca_flower_policy[] = {
     [TCA_FLOWER_KEY_CVLAN_ID] = { .type = NL_A_U16, .optional = true, },
     [TCA_FLOWER_KEY_CVLAN_PRIO] = { .type = NL_A_U8, .optional = true, },
     [TCA_FLOWER_KEY_CVLAN_ETH_TYPE] = { .type = NL_A_U16, .optional = true, },
+    [TCA_FLOWER_KEY_ENC_IP_TOS] = { .type = NL_A_U8,
+                                    .optional = true, },
+    [TCA_FLOWER_KEY_ENC_IP_TOS_MASK] = { .type = NL_A_U8,
+                                         .optional = true, },
+    [TCA_FLOWER_KEY_ENC_IP_TTL] = { .type = NL_A_U8,
+                                    .optional = true, },
+    [TCA_FLOWER_KEY_ENC_IP_TTL_MASK] = { .type = NL_A_U8,
+                                         .optional = true, },
 };
 
 static void
@@ -403,6 +415,14 @@ nl_parse_flower_tunnel(struct nlattr **attrs, struct tc_flower *flower)
         flower->tunnel.tp_dst =
             nl_attr_get_be16(attrs[TCA_FLOWER_KEY_ENC_UDP_DST_PORT]);
     }
+    if (attrs[TCA_FLOWER_KEY_ENC_IP_TOS]) {
+        flower->tunnel.tos =
+            nl_attr_get_u8(attrs[TCA_FLOWER_KEY_ENC_IP_TOS]);
+    }
+    if (attrs[TCA_FLOWER_KEY_ENC_IP_TTL]) {
+        flower->tunnel.ttl =
+            nl_attr_get_u8(attrs[TCA_FLOWER_KEY_ENC_IP_TTL]);
+    }
 }
 
 static void
@@ -496,6 +516,11 @@ nl_parse_flower_ip(struct nlattr **attrs, struct tc_flower *flower) {
     if (attrs[TCA_FLOWER_KEY_IP_TTL_MASK]) {
         key->ip_ttl = nl_attr_get_u8(attrs[TCA_FLOWER_KEY_IP_TTL]);
         mask->ip_ttl = nl_attr_get_u8(attrs[TCA_FLOWER_KEY_IP_TTL_MASK]);
+    }
+
+    if (attrs[TCA_FLOWER_KEY_IP_TOS_MASK]) {
+        key->ip_tos = nl_attr_get_u8(attrs[TCA_FLOWER_KEY_IP_TOS]);
+        mask->ip_tos = nl_attr_get_u8(attrs[TCA_FLOWER_KEY_IP_TOS_MASK]);
     }
 }
 
@@ -632,6 +657,8 @@ static const struct nl_policy tunnel_key_policy[] = {
                                       .optional = true, },
     [TCA_TUNNEL_KEY_ENC_KEY_ID] = { .type = NL_A_U32, .optional = true, },
     [TCA_TUNNEL_KEY_ENC_DST_PORT] = { .type = NL_A_U16, .optional = true, },
+    [TCA_TUNNEL_KEY_ENC_TOS] = { .type = NL_A_U8, .optional = true, },
+    [TCA_TUNNEL_KEY_ENC_TTL] = { .type = NL_A_U8, .optional = true, },
 };
 
 static int
@@ -657,6 +684,8 @@ nl_parse_act_tunnel_key(struct nlattr *options, struct tc_flower *flower)
         struct nlattr *ipv4_dst = tun_attrs[TCA_TUNNEL_KEY_ENC_IPV4_DST];
         struct nlattr *ipv6_src = tun_attrs[TCA_TUNNEL_KEY_ENC_IPV6_SRC];
         struct nlattr *ipv6_dst = tun_attrs[TCA_TUNNEL_KEY_ENC_IPV6_DST];
+        struct nlattr *tos = tun_attrs[TCA_TUNNEL_KEY_ENC_TOS];
+        struct nlattr *ttl = tun_attrs[TCA_TUNNEL_KEY_ENC_TTL];
 
         action = &flower->actions[flower->action_count++];
         action->type = TC_ACT_ENCAP;
@@ -670,6 +699,8 @@ nl_parse_act_tunnel_key(struct nlattr *options, struct tc_flower *flower)
         }
         action->encap.id = id ? be32_to_be64(nl_attr_get_be32(id)) : 0;
         action->encap.tp_dst = dst_port ? nl_attr_get_be16(dst_port) : 0;
+        action->encap.tos = tos ? nl_attr_get_u8(tos) : 0;
+        action->encap.ttl = ttl ? nl_attr_get_u8(ttl) : 0;
     } else if (tun->t_action == TCA_TUNNEL_KEY_ACT_RELEASE) {
         flower->tunnel.tunnel = true;
     } else {
@@ -1242,7 +1273,8 @@ nl_msg_put_act_tunnel_key_set(struct ofpbuf *request, ovs_be64 id,
                                 ovs_be32 ipv4_src, ovs_be32 ipv4_dst,
                                 struct in6_addr *ipv6_src,
                                 struct in6_addr *ipv6_dst,
-                                ovs_be16 tp_dst)
+                                ovs_be16 tp_dst,
+                                uint8_t tos, uint8_t ttl)
 {
     size_t offset;
 
@@ -1264,6 +1296,12 @@ nl_msg_put_act_tunnel_key_set(struct ofpbuf *request, ovs_be64 id,
                                 ipv6_dst);
             nl_msg_put_in6_addr(request, TCA_TUNNEL_KEY_ENC_IPV6_SRC,
                                 ipv6_src);
+        }
+        if (tos) {
+            nl_msg_put_u8(request, TCA_TUNNEL_KEY_ENC_TOS, tos);
+        }
+        if (ttl) {
+            nl_msg_put_u8(request, TCA_TUNNEL_KEY_ENC_TTL, ttl);
         }
         nl_msg_put_be16(request, TCA_TUNNEL_KEY_ENC_DST_PORT, tp_dst);
     }
@@ -1506,7 +1544,9 @@ nl_msg_put_flower_acts(struct ofpbuf *request, struct tc_flower *flower)
                                               action->encap.ipv4.ipv4_dst,
                                               &action->encap.ipv6.ipv6_src,
                                               &action->encap.ipv6.ipv6_dst,
-                                              action->encap.tp_dst);
+                                              action->encap.tp_dst,
+                                              action->encap.tos,
+                                              action->encap.ttl);
                 nl_msg_end_nested(request, act_offset);
             }
             break;
@@ -1581,8 +1621,9 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
     struct in6_addr *ipv6_dst = &flower->tunnel.ipv6.ipv6_dst;
     ovs_be16 tp_dst = flower->tunnel.tp_dst;
     ovs_be32 id = be64_to_be32(flower->tunnel.id);
+    uint8_t tos = flower->tunnel.tos;
+    uint8_t ttl = flower->tunnel.ttl;
 
-    nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_KEY_ID, id);
     if (ipv4_dst) {
         nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_IPV4_SRC, ipv4_src);
         nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_IPV4_DST, ipv4_dst);
@@ -1590,7 +1631,14 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
         nl_msg_put_in6_addr(request, TCA_FLOWER_KEY_ENC_IPV6_SRC, ipv6_src);
         nl_msg_put_in6_addr(request, TCA_FLOWER_KEY_ENC_IPV6_DST, ipv6_dst);
     }
+    if (tos) {
+        nl_msg_put_u8(request, TCA_FLOWER_KEY_ENC_IP_TOS, tos);
+    }
+    if (ttl) {
+        nl_msg_put_u8(request, TCA_FLOWER_KEY_ENC_IP_TTL, ttl);
+    }
     nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_DST_PORT, tp_dst);
+    nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_KEY_ID, id);
 }
 
 #define FLOWER_PUT_MASKED_VALUE(member, type) \
@@ -1625,6 +1673,9 @@ nl_msg_put_flower_options(struct ofpbuf *request, struct tc_flower *flower)
     FLOWER_PUT_MASKED_VALUE(src_mac, TCA_FLOWER_KEY_ETH_SRC);
 
     if (host_eth_type == ETH_P_IP || host_eth_type == ETH_P_IPV6) {
+        FLOWER_PUT_MASKED_VALUE(ip_ttl, TCA_FLOWER_KEY_IP_TTL);
+        FLOWER_PUT_MASKED_VALUE(ip_tos, TCA_FLOWER_KEY_IP_TOS);
+
         if (flower->mask.ip_proto && flower->key.ip_proto) {
             nl_msg_put_u8(request, TCA_FLOWER_KEY_IP_PROTO,
                           flower->key.ip_proto);
@@ -1653,7 +1704,6 @@ nl_msg_put_flower_options(struct ofpbuf *request, struct tc_flower *flower)
     if (host_eth_type == ETH_P_IP) {
             FLOWER_PUT_MASKED_VALUE(ipv4.ipv4_src, TCA_FLOWER_KEY_IPV4_SRC);
             FLOWER_PUT_MASKED_VALUE(ipv4.ipv4_dst, TCA_FLOWER_KEY_IPV4_DST);
-            FLOWER_PUT_MASKED_VALUE(ip_ttl, TCA_FLOWER_KEY_IP_TTL);
     } else if (host_eth_type == ETH_P_IPV6) {
             FLOWER_PUT_MASKED_VALUE(ipv6.ipv6_src, TCA_FLOWER_KEY_IPV6_SRC);
             FLOWER_PUT_MASKED_VALUE(ipv6.ipv6_dst, TCA_FLOWER_KEY_IPV6_DST);

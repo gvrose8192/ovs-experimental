@@ -1224,6 +1224,25 @@ set_meter(100, 1000, );
 set_meter(4294967295, 4294967295);
     encodes as meter:3
 
+# log
+log(verdict=allow, severity=warning);
+    encodes as controller(userdata=00.00.00.07.00.00.00.00.00.04)
+log(name="test1", verdict=drop, severity=info);
+    encodes as controller(userdata=00.00.00.07.00.00.00.00.01.06.74.65.73.74.31)
+log(verdict=drop, severity=info, meter="meter1");
+    encodes as controller(userdata=00.00.00.07.00.00.00.00.01.06,meter_id=4)
+log(name="test1", verdict=drop, severity=info, meter="meter1");
+    encodes as controller(userdata=00.00.00.07.00.00.00.00.01.06.74.65.73.74.31,meter_id=4)
+log(verdict=drop);
+    formats as log(verdict=drop, severity=info);
+    encodes as controller(userdata=00.00.00.07.00.00.00.00.01.06)
+log(verdict=bad_verdict, severity=info);
+    Syntax error at `bad_verdict' unknown verdict.
+log(verdict=drop, severity=bad_severity);
+    Syntax error at `bad_severity' unknown severity.
+log(severity=notice);
+    Syntax error at `;' expecting verdict.
+
 # put_nd_ra_opts
 reg1[0] = put_nd_ra_opts(addr_mode = "slaac", mtu = 1500, prefix = aef0::/64, slla = ae:01:02:03:04:05);
     encodes as controller(userdata=00.00.00.08.00.00.00.00.00.01.de.10.00.00.00.40.86.00.00.00.ff.00.ff.ff.00.00.00.00.00.00.00.00.05.01.00.00.00.00.05.dc.03.04.40.c0.ff.ff.ff.ff.ff.ff.ff.ff.00.00.00.00.ae.f0.00.00.00.00.00.00.00.00.00.00.00.00.00.00.01.01.ae.01.02.03.04.05,pause)
@@ -6153,6 +6172,79 @@ OVN_CLEANUP([hv])
 AT_CLEANUP
 
 
+AT_SETUP([ovn -- ACL rate-limited logging])
+AT_KEYWORDS([ovn])
+ovn_start
+
+net_add n1
+
+sim_add hv
+as hv
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+for i in lp1 lp2; do
+    ovs-vsctl -- add-port br-int $i -- \
+        set interface $i external-ids:iface-id=$i \
+        options:tx_pcap=hv/$i-tx.pcap \
+        options:rxq_pcap=hv/$i-rx.pcap
+done
+
+lp1_mac="f0:00:00:00:00:01"
+lp1_ip="192.168.1.2"
+
+lp2_mac="f0:00:00:00:00:02"
+lp2_ip="192.168.1.3"
+
+ovn-nbctl ls-add lsw0
+ovn-nbctl --wait=sb lsp-add lsw0 lp1
+ovn-nbctl --wait=sb lsp-add lsw0 lp2
+ovn-nbctl lsp-set-addresses lp1 $lp1_mac
+ovn-nbctl lsp-set-addresses lp2 $lp2_mac
+ovn-nbctl --wait=sb sync
+
+
+# Add an ACL that rate-limits logs at 10 per second.
+ovn-nbctl meter-add http-rl1 drop 10 pktps
+ovn-nbctl --log --severity=alert --meter=http-rl1 --name=http-acl1 acl-add lsw0 to-lport 1000 'tcp.dst==80' drop
+
+# Add an ACL that rate-limits logs at 5 per second.
+ovn-nbctl meter-add http-rl2 drop 5 pktps
+ovn-nbctl --log --severity=alert --meter=http-rl2 --name=http-acl2 acl-add lsw0 to-lport 1000 'tcp.dst==81' allow
+
+# Add an ACL that doesn't rate-limit logs.
+ovn-nbctl --log --severity=alert --name=http-acl3 acl-add lsw0 to-lport 1000 'tcp.dst==82' drop
+
+
+# For each ACL, send 100 packets.
+for i in `seq 1 100`; do
+    ovs-appctl netdev-dummy/receive lp1 'in_port(1),eth(src=f0:00:00:00:00:01,dst=f0:00:00:00:00:02),eth_type(0x0800),ipv4(src=192.168.1.2,dst=192.168.1.3,proto=6,tos=0,ttl=64,frag=no),tcp(src=7777,dst=80)'
+
+    ovs-appctl netdev-dummy/receive lp1 'in_port(1),eth(src=f0:00:00:00:00:01,dst=f0:00:00:00:00:02),eth_type(0x0800),ipv4(src=192.168.1.2,dst=192.168.1.3,proto=6,tos=0,ttl=64,frag=no),tcp(src=7777,dst=81)'
+
+    ovs-appctl netdev-dummy/receive lp1 'in_port(1),eth(src=f0:00:00:00:00:01,dst=f0:00:00:00:00:02),eth_type(0x0800),ipv4(src=192.168.1.2,dst=192.168.1.3,proto=6,tos=0,ttl=64,frag=no),tcp(src=7777,dst=82)'
+done
+
+# Print some information that may help debugging.
+as hv ovs-appctl -t ovn-controller meter-table-list
+as hv ovs-ofctl -O OpenFlow13 meter-stats br-int
+
+# The userspace meter implementation doesn't precisely enforce counts,
+# so we just check that exactly 100 "http-acl3" actions were logged and
+# that there were more "http-acl1" actions than "http-acl2" ones.
+OVS_WAIT_UNTIL([ test 100 = $(grep -c 'http-acl3' hv/ovn-controller.log) ])
+
+n_acl1=$(grep -c 'http-acl1' hv/ovn-controller.log)
+n_acl2=$(grep -c 'http-acl2' hv/ovn-controller.log)
+n_acl3=$(grep -c 'http-acl3' hv/ovn-controller.log)
+
+AT_CHECK([ test $n_acl3 -gt $n_acl1 ], [0], [])
+AT_CHECK([ test $n_acl1 -gt $n_acl2 ], [0], [])
+
+
+OVN_CLEANUP([hv])
+AT_CLEANUP
+
+
 AT_SETUP([ovn -- DSCP marking and meter check])
 AT_KEYWORDS([ovn])
 ovn_start
@@ -10166,6 +10258,115 @@ done
 
 # Gracefully terminate daemons
 OVN_CLEANUP([hv1], [hv2], [hv3])
+AT_CLEANUP
+
+AT_SETUP([ovn -- Address Set generation from Port Groups (static addressing)])
+ovn_start
+
+ovn-nbctl ls-add ls1
+
+ovn-nbctl lsp-add ls1 lp1
+ovn-nbctl lsp-add ls1 lp2
+ovn-nbctl lsp-add ls1 lp3
+
+ovn-nbctl lsp-set-addresses lp1 "02:00:00:00:00:01 10.0.0.1 2001:db8::1"
+ovn-nbctl lsp-set-addresses lp2 "02:00:00:00:00:02 10.0.0.2 2001:db8::2"
+ovn-nbctl lsp-set-addresses lp3 "02:00:00:00:00:03 10.0.0.3 2001:db8::3"
+
+ovn-nbctl create Port_Group name=pg1
+ovn-nbctl create Port_Group name=pg2
+
+ovn-nbctl --id=@p get Logical_Switch_Port lp1 -- add Port_Group pg1 ports @p
+ovn-nbctl --id=@p get Logical_Switch_Port lp2 -- add Port_Group pg1 ports @p
+ovn-nbctl --id=@p get Logical_Switch_Port lp2 -- add Port_Group pg2 ports @p
+ovn-nbctl --id=@p get Logical_Switch_Port lp3 -- add Port_Group pg2 ports @p
+
+ovn-nbctl --wait=sb sync
+
+dnl Check if port group address sets were populated with ports' addresses
+AT_CHECK([ovn-sbctl get Address_Set pg1_ip4 addresses],
+         [0], [[["10.0.0.1", "10.0.0.2"]]
+])
+AT_CHECK([ovn-sbctl get Address_Set pg2_ip4 addresses],
+         [0], [[["10.0.0.2", "10.0.0.3"]]
+])
+AT_CHECK([ovn-sbctl get Address_Set pg1_ip6 addresses],
+         [0], [[["2001:db8::1", "2001:db8::2"]]
+])
+AT_CHECK([ovn-sbctl get Address_Set pg2_ip6 addresses],
+         [0], [[["2001:db8::2", "2001:db8::3"]]
+])
+
+ovn-nbctl --wait=sb lsp-set-addresses lp1 \
+    "02:00:00:00:00:01 10.0.0.11 2001:db8::11"
+
+dnl Check if updated address got propagated to the port group address sets
+AT_CHECK([ovn-sbctl get Address_Set pg1_ip4 addresses],
+         [0], [[["10.0.0.11", "10.0.0.2"]]
+])
+AT_CHECK([ovn-sbctl get Address_Set pg1_ip6 addresses],
+         [0], [[["2001:db8::11", "2001:db8::2"]]
+])
+
+AT_CLEANUP
+
+AT_SETUP([ovn -- Address Set generation from Port Groups (dynamic addressing)])
+ovn_start
+
+ovn-nbctl ls-add ls1
+ovn-nbctl ls-add ls2
+ovn-nbctl ls-add ls3
+
+ovn-nbctl set Logical_Switch ls1 \
+    other_config:subnet=10.1.0.0/24 other_config:ipv6_prefix="2001:db8:1::"
+ovn-nbctl set Logical_Switch ls2 \
+    other_config:subnet=10.2.0.0/24 other_config:ipv6_prefix="2001:db8:2::"
+ovn-nbctl set Logical_Switch ls3 \
+    other_config:subnet=10.3.0.0/24 other_config:ipv6_prefix="2001:db8:3::"
+
+ovn-nbctl lsp-add ls1 lp1
+ovn-nbctl lsp-add ls2 lp2
+ovn-nbctl lsp-add ls3 lp3
+
+ovn-nbctl lsp-set-addresses lp1 "02:00:00:00:00:01 dynamic"
+ovn-nbctl lsp-set-addresses lp2 "02:00:00:00:00:02 dynamic"
+ovn-nbctl lsp-set-addresses lp3 "02:00:00:00:00:03 dynamic"
+
+ovn-nbctl create Port_Group name=pg1
+ovn-nbctl create Port_Group name=pg2
+
+ovn-nbctl --id=@p get Logical_Switch_Port lp1 -- add Port_Group pg1 ports @p
+ovn-nbctl --id=@p get Logical_Switch_Port lp2 -- add Port_Group pg1 ports @p
+ovn-nbctl --id=@p get Logical_Switch_Port lp2 -- add Port_Group pg2 ports @p
+ovn-nbctl --id=@p get Logical_Switch_Port lp3 -- add Port_Group pg2 ports @p
+
+ovn-nbctl --wait=sb sync
+
+dnl Check if port group address sets were populated with ports' addresses
+AT_CHECK([ovn-sbctl get Address_Set pg1_ip4 addresses],
+         [0], [[["10.1.0.2", "10.2.0.2"]]
+])
+AT_CHECK([ovn-sbctl get Address_Set pg2_ip4 addresses],
+         [0], [[["10.2.0.2", "10.3.0.2"]]
+])
+AT_CHECK([ovn-sbctl get Address_Set pg1_ip6 addresses],
+         [0], [[["2001:db8:1::ff:fe00:1", "2001:db8:2::ff:fe00:2"]]
+])
+AT_CHECK([ovn-sbctl get Address_Set pg2_ip6 addresses],
+         [0], [[["2001:db8:2::ff:fe00:2", "2001:db8:3::ff:fe00:3"]]
+])
+
+ovn-nbctl set Logical_Switch ls1 \
+    other_config:subnet=10.11.0.0/24 other_config:ipv6_prefix="2001:db8:11::"
+
+dnl Check if updated address got propagated to the port group address sets
+AT_CHECK([ovn-sbctl get Address_Set pg1_ip4 addresses],
+         [0], [[["10.11.0.2", "10.2.0.2"]]
+])
+AT_CHECK([ovn-sbctl get Address_Set pg1_ip6 addresses],
+         [0], [[["2001:db8:11::ff:fe00:1", "2001:db8:2::ff:fe00:2"]]
+])
+
 AT_CLEANUP
 
 AT_SETUP([ovn -- ACL conjunction])

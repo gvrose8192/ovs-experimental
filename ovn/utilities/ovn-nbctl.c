@@ -496,6 +496,12 @@ QoS commands:\n\
                             remove QoS rules from SWITCH\n\
   qos-list SWITCH           print QoS rules for SWITCH\n\
 \n\
+Meter commands:\n\
+  meter-add NAME ACTION RATE UNIT [BURST]\n\
+                            add a meter\n\
+  meter-del [NAME]          remove meters\n\
+  meter-list                print meters\n\
+\n\
 Logical switch port commands:\n\
   lsp-add SWITCH PORT       add logical port PORT on SWITCH\n\
   lsp-add SWITCH PORT PARENT TAG\n\
@@ -1816,7 +1822,10 @@ nbctl_acl_list(struct ctl_context *ctx)
                 ds_put_format(&ctx->output, "name=%s,", acl->name);
             }
             if (acl->severity) {
-                ds_put_format(&ctx->output, "severity=%s", acl->severity);
+                ds_put_format(&ctx->output, "severity=%s,", acl->severity);
+            }
+            if (acl->meter) {
+                ds_put_format(&ctx->output, "meter=\"%s\",", acl->meter);
             }
             ds_chomp(&ctx->output, ',');
             ds_put_cstr(&ctx->output, ")");
@@ -1870,6 +1879,9 @@ parse_priority(const char *arg, int64_t *priority_p)
     int64_t priority;
     if (!ovs_scan(arg, "%"SCNd64, &priority)
         || priority < 0 || priority > 32767) {
+        /* Priority_p could be uninitialized as no valid priority was
+         * input, initialize it to a valid value of 0 before returning */
+        *priority_p = 0;
         return xasprintf("%s: priority must in range 0...32767", arg);
     }
     *priority_p = priority;
@@ -1921,7 +1933,8 @@ nbctl_acl_add(struct ctl_context *ctx)
     bool log = shash_find(&ctx->options, "--log") != NULL;
     const char *severity = shash_find_data(&ctx->options, "--severity");
     const char *name = shash_find_data(&ctx->options, "--name");
-    if (log || severity || name) {
+    const char *meter = shash_find_data(&ctx->options, "--meter");
+    if (log || severity || name || meter) {
         nbrec_acl_set_log(acl, true);
     }
     if (severity) {
@@ -1933,6 +1946,9 @@ nbctl_acl_add(struct ctl_context *ctx)
     }
     if (name) {
         nbrec_acl_set_name(acl, name);
+    }
+    if (meter) {
+        nbrec_acl_set_meter(acl, meter);
     }
 
     /* Check if same acl already exists for the ls/portgroup */
@@ -2287,6 +2303,137 @@ nbctl_qos_del(struct ctl_context *ctx)
             free(new_qos_rules);
             return;
         }
+    }
+}
+
+static int
+meter_cmp(const void *meter1_, const void *meter2_)
+{
+    struct nbrec_meter *const *meter1p = meter1_;
+    struct nbrec_meter *const *meter2p = meter2_;
+    const struct nbrec_meter *meter1 = *meter1p;
+    const struct nbrec_meter *meter2 = *meter2p;
+
+    return strcmp(meter1->name, meter2->name);
+}
+
+static void
+nbctl_meter_list(struct ctl_context *ctx)
+{
+    const struct nbrec_meter **meters = NULL;
+    const struct nbrec_meter *meter;
+    size_t n_capacity = 0;
+    size_t n_meters = 0;
+
+    NBREC_METER_FOR_EACH (meter, ctx->idl) {
+        if (n_meters == n_capacity) {
+            meters = x2nrealloc(meters, &n_capacity, sizeof *meters);
+        }
+
+        meters[n_meters] = meter;
+        n_meters++;
+    }
+
+    if (n_meters) {
+        qsort(meters, n_meters, sizeof *meters, meter_cmp);
+    }
+
+    for (size_t i = 0; i < n_meters; i++) {
+        meter = meters[i];
+        ds_put_format(&ctx->output, "%s: bands:\n", meter->name);
+
+        for (size_t j = 0; j < meter->n_bands; j++) {
+            const struct nbrec_meter_band *band = meter->bands[j];
+
+            ds_put_format(&ctx->output, "  %s: %"PRId64" %s",
+                          band->action, band->rate, meter->unit);
+            if (band->burst_size) {
+                ds_put_format(&ctx->output, ", %"PRId64" %s burst",
+                              band->burst_size,
+                              !strcmp(meter->unit, "kbps") ? "kb" : "packet" );
+            }
+        }
+
+        ds_put_cstr(&ctx->output, "\n");
+    }
+
+    free(meters);
+}
+
+static void
+nbctl_meter_add(struct ctl_context *ctx)
+{
+    const struct nbrec_meter *meter;
+
+    const char *name = ctx->argv[1];
+    NBREC_METER_FOR_EACH (meter, ctx->idl) {
+        if (!strcmp(meter->name, name)) {
+            ctl_fatal("meter with name \"%s\" already exists", name);
+        }
+    }
+
+    if (!strncmp(name, "__", 2)) {
+        ctl_fatal("meter names that begin with \"__\" are reserved");
+    }
+
+    const char *action = ctx->argv[2];
+    if (strcmp(action, "drop")) {
+        ctl_fatal("action must be \"drop\"");
+    }
+
+    int64_t rate;
+    if (!ovs_scan(ctx->argv[3], "%"SCNd64, &rate)
+        || rate < 1 || rate > UINT32_MAX) {
+        ctl_fatal("rate must be in the range 1...4294967295");
+    }
+
+    const char *unit = ctx->argv[4];
+    if (strcmp(unit, "kbps") && strcmp(unit, "pktps")) {
+        ctl_fatal("unit must be \"kbps\" or \"pktps\"");
+    }
+
+    int64_t burst = 0;
+    if (ctx->argc > 5) {
+        if (!ovs_scan(ctx->argv[5], "%"SCNd64, &burst)
+            || burst < 0 || burst > UINT32_MAX) {
+            ctl_fatal("burst must be in the range 0...4294967295");
+        }
+    }
+
+    /* Create the band.  We only support adding a single band. */
+    struct nbrec_meter_band *band = nbrec_meter_band_insert(ctx->txn);
+    nbrec_meter_band_set_action(band, action);
+    nbrec_meter_band_set_rate(band, rate);
+    nbrec_meter_band_set_burst_size(band, burst);
+
+    /* Create the meter. */
+    meter = nbrec_meter_insert(ctx->txn);
+    nbrec_meter_set_name(meter, name);
+    nbrec_meter_set_unit(meter, unit);
+    nbrec_meter_set_bands(meter, &band, 1);
+}
+
+static void
+nbctl_meter_del(struct ctl_context *ctx)
+{
+    const struct nbrec_meter *meter, *next;
+
+    /* If a name is not specified, delete all meters. */
+    if (ctx->argc == 1) {
+        NBREC_METER_FOR_EACH_SAFE (meter, next, ctx->idl) {
+            nbrec_meter_delete(meter);
+        }
+        return;
+    }
+
+    /* Remove the matching meter. */
+    NBREC_METER_FOR_EACH (meter, ctx->idl) {
+        if (strcmp(ctx->argv[1], meter->name)) {
+            continue;
+        }
+
+        nbrec_meter_delete(meter);
+        return;
     }
 }
 
@@ -2899,10 +3046,11 @@ dhcp_options_get(struct ctl_context *ctx, const char *id, bool must_exist,
         dhcp_opts = nbrec_dhcp_options_get_for_uuid(ctx->idl, &dhcp_opts_uuid);
     }
 
+    *dhcp_opts_p = dhcp_opts;
     if (!dhcp_opts && must_exist) {
         return xasprintf("%s: dhcp options UUID not found", id);
     }
-    *dhcp_opts_p = dhcp_opts;
+
     return NULL;
 }
 
@@ -4369,6 +4517,9 @@ static const struct ctl_table_class tables[NBREC_N_TABLES] = {
     [NBREC_TABLE_ADDRESS_SET].row_ids[0]
     = {&nbrec_address_set_col_name, NULL, NULL},
 
+    [NBREC_TABLE_PORT_GROUP].row_ids[0]
+    = {&nbrec_port_group_col_name, NULL, NULL},
+
     [NBREC_TABLE_ACL].row_ids[0] = {&nbrec_acl_col_name, NULL, NULL},
 };
 
@@ -4664,7 +4815,7 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     /* acl commands. */
     { "acl-add", 5, 6, "{SWITCH | PORTGROUP} DIRECTION PRIORITY MATCH ACTION",
       NULL, nbctl_acl_add, NULL,
-      "--log,--may-exist,--type=,--name=,--severity=", RW },
+      "--log,--may-exist,--type=,--name=,--severity=,--meter=", RW },
     { "acl-del", 1, 4, "{SWITCH | PORTGROUP} [DIRECTION [PRIORITY MATCH]]",
       NULL, nbctl_acl_del, NULL, "--type=", RW },
     { "acl-list", 1, 1, "{SWITCH | PORTGROUP}",
@@ -4677,6 +4828,12 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "qos-del", 1, 4, "SWITCH [DIRECTION [PRIORITY MATCH]]", NULL,
       nbctl_qos_del, NULL, "", RW },
     { "qos-list", 1, 1, "SWITCH", NULL, nbctl_qos_list, NULL, "", RO },
+
+    /* meter commands. */
+    { "meter-add", 4, 5, "NAME ACTION RATE UNIT [BURST]", NULL,
+      nbctl_meter_add, NULL, "", RW },
+    { "meter-del", 0, 1, "[NAME]", NULL, nbctl_meter_del, NULL, "", RW },
+    { "meter-list", 0, 0, "", NULL, nbctl_meter_list, NULL, "", RO },
 
     /* logical switch port commands. */
     { "lsp-add", 2, 4, "SWITCH PORT [PARENT] [TAG]", NULL, nbctl_lsp_add,
@@ -4809,6 +4966,19 @@ nbctl_cmd_init(void)
     ctl_register_commands(nbctl_commands);
 }
 
+static const struct option *
+find_option_by_value(const struct option *options, int value)
+{
+    const struct option *o;
+
+    for (o = options; o->name; o++) {
+        if (o->val == value) {
+            return o;
+        }
+    }
+    return NULL;
+}
+
 static char * OVS_WARN_UNUSED_RESULT
 server_parse_options(int argc, char *argv[], struct shash *local_options,
                      int *n_options_p)
@@ -4828,7 +4998,7 @@ server_parse_options(int argc, char *argv[], struct shash *local_options,
     short_options = build_short_options(global_long_options, false);
     options = append_command_options(global_long_options, OPT_LOCAL);
 
-    optind = 1;
+    optind = 0;
     opterr = 0;
     for (;;) {
         int idx;
@@ -4864,9 +5034,11 @@ server_parse_options(int argc, char *argv[], struct shash *local_options,
         TABLE_OPTION_HANDLERS(&table_style)
 
         case '?':
-            if (optopt) {
+            if (find_option_by_value(options, optopt)) {
                 error = xasprintf("option '%s' doesn't allow an argument",
                                   argv[optind-1]);
+            } else if (optopt) {
+                error = xasprintf("unrecognized option '%c'", optopt);
             } else {
                 error = xasprintf("unrecognized option '%s'", argv[optind-1]);
             }
