@@ -253,6 +253,7 @@ parse_options(int argc, char *argv[])
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
     uint32_t versions;
     enum ofputil_protocol version_protocols;
+    unsigned int timeout = 0;
 
     /* For now, ovs-ofctl only enables OpenFlow 1.0 by default.  This is
      * because ovs-ofctl implements command such as "add-flow" as raw OpenFlow
@@ -272,7 +273,6 @@ parse_options(int argc, char *argv[])
     set_allowed_ofp_versions("OpenFlow10");
 
     for (;;) {
-        unsigned long int timeout;
         int c;
 
         c = getopt_long(argc, argv, short_options, long_options, NULL);
@@ -282,12 +282,8 @@ parse_options(int argc, char *argv[])
 
         switch (c) {
         case 't':
-            timeout = strtoul(optarg, NULL, 10);
-            if (timeout <= 0) {
-                ovs_fatal(0, "value %s on -t or --timeout is not at least 1",
-                          optarg);
-            } else {
-                time_alarm(timeout);
+            if (!str_to_uint(optarg, 10, &timeout) || !timeout) {
+                ovs_fatal(0, "value %s on -t or --timeout is invalid", optarg);
             }
             break;
 
@@ -392,6 +388,8 @@ parse_options(int argc, char *argv[])
             abort();
         }
     }
+
+    ctl_timeout_setup(timeout);
 
     if (n_criteria) {
         /* Always do a final sort pass based on priority. */
