@@ -53,6 +53,7 @@
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/poll-loop.h"
 #include "openvswitch/shash.h"
+#include "openvswitch/thread.h"
 #include "openvswitch/vlog.h"
 #include "packets.h"
 #include "random.h"
@@ -213,6 +214,7 @@ static int ovs_vport_family;
 static int ovs_flow_family;
 static int ovs_packet_family;
 static int ovs_meter_family;
+static int ovs_ct_limit_family;
 
 /* Generic Netlink multicast groups for OVS.
  *
@@ -2919,12 +2921,198 @@ dpif_netlink_ct_flush(struct dpif *dpif OVS_UNUSED, const uint16_t *zone,
     }
 }
 
+static int
+dpif_netlink_ct_set_limits(struct dpif *dpif OVS_UNUSED,
+                           const uint32_t *default_limits,
+                           const struct ovs_list *zone_limits)
+{
+    struct ovs_zone_limit req_zone_limit;
+
+    if (ovs_ct_limit_family < 0) {
+        return EOPNOTSUPP;
+    }
+
+    struct ofpbuf *request = ofpbuf_new(NL_DUMP_BUFSIZE);
+    nl_msg_put_genlmsghdr(request, 0, ovs_ct_limit_family,
+                          NLM_F_REQUEST | NLM_F_ECHO, OVS_CT_LIMIT_CMD_SET,
+                          OVS_CT_LIMIT_VERSION);
+
+    struct ovs_header *ovs_header;
+    ovs_header = ofpbuf_put_uninit(request, sizeof *ovs_header);
+    ovs_header->dp_ifindex = 0;
+
+    size_t opt_offset;
+    opt_offset = nl_msg_start_nested(request, OVS_CT_LIMIT_ATTR_ZONE_LIMIT);
+    if (default_limits) {
+        req_zone_limit.zone_id = OVS_ZONE_LIMIT_DEFAULT_ZONE;
+        req_zone_limit.limit = *default_limits;
+        nl_msg_put(request, &req_zone_limit, sizeof req_zone_limit);
+    }
+
+    if (!ovs_list_is_empty(zone_limits)) {
+        struct ct_dpif_zone_limit *zone_limit;
+
+        LIST_FOR_EACH (zone_limit, node, zone_limits) {
+            req_zone_limit.zone_id = zone_limit->zone;
+            req_zone_limit.limit = zone_limit->limit;
+            nl_msg_put(request, &req_zone_limit, sizeof req_zone_limit);
+        }
+    }
+    nl_msg_end_nested(request, opt_offset);
+
+    int err = nl_transact(NETLINK_GENERIC, request, NULL);
+    ofpbuf_uninit(request);
+    return err;
+}
+
+static int
+dpif_netlink_zone_limits_from_ofpbuf(const struct ofpbuf *buf,
+                                     uint32_t *default_limit,
+                                     struct ovs_list *zone_limits)
+{
+    static const struct nl_policy ovs_ct_limit_policy[] = {
+        [OVS_CT_LIMIT_ATTR_ZONE_LIMIT] = { .type = NL_A_NESTED,
+                                           .optional = true },
+    };
+
+    struct ofpbuf b = ofpbuf_const_initializer(buf->data, buf->size);
+    struct nlmsghdr *nlmsg = ofpbuf_try_pull(&b, sizeof *nlmsg);
+    struct genlmsghdr *genl = ofpbuf_try_pull(&b, sizeof *genl);
+    struct ovs_header *ovs_header = ofpbuf_try_pull(&b, sizeof *ovs_header);
+
+    struct nlattr *attr[ARRAY_SIZE(ovs_ct_limit_policy)];
+
+    if (!nlmsg || !genl || !ovs_header
+        || nlmsg->nlmsg_type != ovs_ct_limit_family
+        || !nl_policy_parse(&b, 0, ovs_ct_limit_policy, attr,
+                            ARRAY_SIZE(ovs_ct_limit_policy))) {
+        return EINVAL;
+    }
+
+
+    if (!attr[OVS_CT_LIMIT_ATTR_ZONE_LIMIT]) {
+        return EINVAL;
+    }
+
+    int rem = NLA_ALIGN(
+                nl_attr_get_size(attr[OVS_CT_LIMIT_ATTR_ZONE_LIMIT]));
+    const struct ovs_zone_limit *zone_limit =
+                nl_attr_get(attr[OVS_CT_LIMIT_ATTR_ZONE_LIMIT]);
+
+    while (rem >= sizeof *zone_limit) {
+        if (zone_limit->zone_id == OVS_ZONE_LIMIT_DEFAULT_ZONE) {
+            *default_limit = zone_limit->limit;
+        } else if (zone_limit->zone_id < OVS_ZONE_LIMIT_DEFAULT_ZONE ||
+                   zone_limit->zone_id > UINT16_MAX) {
+        } else {
+            ct_dpif_push_zone_limit(zone_limits, zone_limit->zone_id,
+                                    zone_limit->limit, zone_limit->count);
+        }
+        rem -= NLA_ALIGN(sizeof *zone_limit);
+        zone_limit = ALIGNED_CAST(struct ovs_zone_limit *,
+            (unsigned char *) zone_limit  + NLA_ALIGN(sizeof *zone_limit));
+    }
+    return 0;
+}
+
+static int
+dpif_netlink_ct_get_limits(struct dpif *dpif OVS_UNUSED,
+                           uint32_t *default_limit,
+                           const struct ovs_list *zone_limits_request,
+                           struct ovs_list *zone_limits_reply)
+{
+    if (ovs_ct_limit_family < 0) {
+        return EOPNOTSUPP;
+    }
+
+    struct ofpbuf *request = ofpbuf_new(NL_DUMP_BUFSIZE);
+    nl_msg_put_genlmsghdr(request, 0, ovs_ct_limit_family,
+            NLM_F_REQUEST | NLM_F_ECHO, OVS_CT_LIMIT_CMD_GET,
+            OVS_CT_LIMIT_VERSION);
+
+    struct ovs_header *ovs_header;
+    ovs_header = ofpbuf_put_uninit(request, sizeof *ovs_header);
+    ovs_header->dp_ifindex = 0;
+
+    if (!ovs_list_is_empty(zone_limits_request)) {
+        size_t opt_offset = nl_msg_start_nested(request,
+                                                OVS_CT_LIMIT_ATTR_ZONE_LIMIT);
+
+        struct ovs_zone_limit req_zone_limit;
+        req_zone_limit.zone_id = OVS_ZONE_LIMIT_DEFAULT_ZONE;
+        nl_msg_put(request, &req_zone_limit, sizeof req_zone_limit);
+
+        struct ct_dpif_zone_limit *zone_limit;
+        LIST_FOR_EACH (zone_limit, node, zone_limits_request) {
+            req_zone_limit.zone_id = zone_limit->zone;
+            nl_msg_put(request, &req_zone_limit, sizeof req_zone_limit);
+        }
+
+        nl_msg_end_nested(request, opt_offset);
+    }
+
+    struct ofpbuf *reply;
+    int err = nl_transact(NETLINK_GENERIC, request, &reply);
+    if (err) {
+        goto out;
+    }
+
+    err = dpif_netlink_zone_limits_from_ofpbuf(reply, default_limit,
+                                               zone_limits_reply);
+
+out:
+    ofpbuf_uninit(request);
+    ofpbuf_uninit(reply);
+    return err;
+}
+
+static int
+dpif_netlink_ct_del_limits(struct dpif *dpif OVS_UNUSED,
+                           const struct ovs_list *zone_limits)
+{
+    if (ovs_ct_limit_family < 0) {
+        return EOPNOTSUPP;
+    }
+
+    struct ofpbuf *request = ofpbuf_new(NL_DUMP_BUFSIZE);
+    nl_msg_put_genlmsghdr(request, 0, ovs_ct_limit_family,
+            NLM_F_REQUEST | NLM_F_ECHO, OVS_CT_LIMIT_CMD_DEL,
+            OVS_CT_LIMIT_VERSION);
+
+    struct ovs_header *ovs_header;
+    ovs_header = ofpbuf_put_uninit(request, sizeof *ovs_header);
+    ovs_header->dp_ifindex = 0;
+
+    if (!ovs_list_is_empty(zone_limits)) {
+        size_t opt_offset =
+            nl_msg_start_nested(request, OVS_CT_LIMIT_ATTR_ZONE_LIMIT);
+
+        struct ct_dpif_zone_limit *zone_limit;
+        LIST_FOR_EACH (zone_limit, node, zone_limits) {
+            struct ovs_zone_limit req_zone_limit;
+            req_zone_limit.zone_id = zone_limit->zone;
+            nl_msg_put(request, &req_zone_limit, sizeof req_zone_limit);
+        }
+        nl_msg_end_nested(request, opt_offset);
+    }
+
+    int err = nl_transact(NETLINK_GENERIC, request, NULL);
+
+    ofpbuf_uninit(request);
+    return err;
+}
 
 /* Meters */
 
 /* Set of supported meter flags */
 #define DP_SUPPORTED_METER_FLAGS_MASK \
     (OFPMF13_STATS | OFPMF13_PKTPS | OFPMF13_KBPS | OFPMF13_BURST)
+
+/* Meter support was introduced in Linux 4.15.  In some versions of
+ * Linux 4.15, 4.16, and 4.17, there was a bug that never set the id
+ * when the meter was created, so all meters essentially had an id of
+ * zero.  Check for that condition and disable meters on those kernels. */
+static bool probe_broken_meters(struct dpif *);
 
 static void
 dpif_netlink_meter_init(struct dpif_netlink *dpif, struct ofpbuf *buf,
@@ -2977,6 +3165,11 @@ static void
 dpif_netlink_meter_get_features(const struct dpif *dpif_,
                                 struct ofputil_meter_features *features)
 {
+    if (probe_broken_meters(CONST_CAST(struct dpif *, dpif_))) {
+        features = NULL;
+        return;
+    }
+
     struct ofpbuf buf, *msg;
     uint64_t stub[1024 / 8];
 
@@ -3030,8 +3223,8 @@ dpif_netlink_meter_get_features(const struct dpif *dpif_,
 }
 
 static int
-dpif_netlink_meter_set(struct dpif *dpif_, ofproto_meter_id *meter_id,
-                       struct ofputil_meter_config *config)
+dpif_netlink_meter_set__(struct dpif *dpif_, ofproto_meter_id meter_id,
+                         struct ofputil_meter_config *config)
 {
     struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
     struct ofpbuf buf, *msg;
@@ -3057,9 +3250,8 @@ dpif_netlink_meter_set(struct dpif *dpif_, ofproto_meter_id *meter_id,
 
     dpif_netlink_meter_init(dpif, &buf, stub, sizeof stub, OVS_METER_CMD_SET);
 
-    if (meter_id->uint32 != UINT32_MAX) {
-        nl_msg_put_u32(&buf, OVS_METER_ATTR_ID, meter_id->uint32);
-    }
+    nl_msg_put_u32(&buf, OVS_METER_ATTR_ID, meter_id.uint32);
+
     if (config->flags & OFPMF13_KBPS) {
         nl_msg_put_flag(&buf, OVS_METER_ATTR_KBPS);
     }
@@ -3098,9 +3290,24 @@ dpif_netlink_meter_set(struct dpif *dpif_, ofproto_meter_id *meter_id,
         return error;
     }
 
-    meter_id->uint32 = nl_attr_get_u32(a[OVS_METER_ATTR_ID]);
+    if (nl_attr_get_u32(a[OVS_METER_ATTR_ID]) != meter_id.uint32) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_INFO_RL(&rl,
+                     "Kernel returned a different meter id than requested");
+    }
     ofpbuf_delete(msg);
     return 0;
+}
+
+static int
+dpif_netlink_meter_set(struct dpif *dpif_, ofproto_meter_id meter_id,
+                       struct ofputil_meter_config *config)
+{
+    if (probe_broken_meters(dpif_)) {
+        return ENOMEM;
+    }
+
+    return dpif_netlink_meter_set__(dpif_, meter_id, config);
 }
 
 /* Retrieve statistics and/or delete meter 'meter_id'.  Statistics are
@@ -3203,6 +3410,50 @@ dpif_netlink_meter_del(struct dpif *dpif, ofproto_meter_id meter_id,
                                         OVS_METER_CMD_DEL);
 }
 
+static bool
+probe_broken_meters__(struct dpif *dpif)
+{
+    /* This test is destructive if a probe occurs while ovs-vswitchd is
+     * running (e.g., an ovs-dpctl meter command is called), so choose a
+     * random high meter id to make this less likely to occur. */
+    ofproto_meter_id id1 = { 54545401 };
+    ofproto_meter_id id2 = { 54545402 };
+    struct ofputil_meter_band band = {OFPMBT13_DROP, 0, 1, 0};
+    struct ofputil_meter_config config1 = { 1, OFPMF13_KBPS, 1, &band};
+    struct ofputil_meter_config config2 = { 2, OFPMF13_KBPS, 1, &band};
+
+    /* Try adding two meters and make sure that they both come back with
+     * the proper meter id.  Use the "__" version so that we don't cause
+     * a recurve deadlock. */
+    dpif_netlink_meter_set__(dpif, id1, &config1);
+    dpif_netlink_meter_set__(dpif, id2, &config2);
+
+    if (dpif_netlink_meter_get(dpif, id1, NULL, 0)
+        || dpif_netlink_meter_get(dpif, id2, NULL, 0)) {
+        VLOG_INFO("The kernel module has a broken meter implementation.");
+        return true;
+    }
+
+    dpif_netlink_meter_del(dpif, id1, NULL, 0);
+    dpif_netlink_meter_del(dpif, id2, NULL, 0);
+
+    return false;
+}
+
+static bool
+probe_broken_meters(struct dpif *dpif)
+{
+    /* This is a once-only test because currently OVS only has at most a single
+     * Netlink capable datapath on any given platform. */
+    static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
+
+    static bool broken_meters = false;
+    if (ovsthread_once_start(&once)) {
+        broken_meters = probe_broken_meters__(dpif);
+        ovsthread_once_done(&once);
+    }
+    return broken_meters;
+}
 
 const struct dpif_class dpif_netlink_class = {
     "system",
@@ -3252,6 +3503,9 @@ const struct dpif_class dpif_netlink_class = {
     NULL,                       /* ct_set_maxconns */
     NULL,                       /* ct_get_maxconns */
     NULL,                       /* ct_get_nconns */
+    dpif_netlink_ct_set_limits,
+    dpif_netlink_ct_get_limits,
+    dpif_netlink_ct_del_limits,
     dpif_netlink_meter_get_features,
     dpif_netlink_meter_set,
     dpif_netlink_meter_get,
@@ -3290,6 +3544,12 @@ dpif_netlink_init(void)
             if (nl_lookup_genl_family(OVS_METER_FAMILY, &ovs_meter_family)) {
                 VLOG_INFO("The kernel module does not support meters.");
             }
+        }
+        if (nl_lookup_genl_family(OVS_CT_LIMIT_FAMILY,
+                                  &ovs_ct_limit_family) < 0) {
+            VLOG_INFO("Generic Netlink family '%s' does not exist. "
+                      "Please update the Open vSwitch kernel module to enable "
+                      "the conntrack limit feature.", OVS_CT_LIMIT_FAMILY);
         }
 
         ovs_tunnels_out_of_tree = dpif_netlink_rtnl_probe_oot_tunnels();

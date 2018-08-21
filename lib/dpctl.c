@@ -215,14 +215,23 @@ dp_arg_exists(int argc, const char *argv[])
  *
  * The datapath name is not a mandatory parameter for this command.  If it is
  * not specified, we retrieve it from the current setup, assuming only one
- * exists.  On success stores the opened dpif in '*dpifp'. */
+ * exists.  On success stores the opened dpif in '*dpifp', and the next
+ * arugment to be parsed in '*indexp'.  */
 static int
 opt_dpif_open(int argc, const char *argv[], struct dpctl_params *dpctl_p,
-              uint8_t max_args, struct dpif **dpifp)
+              int max_args, struct dpif **dpifp, int *indexp)
 {
     char *dpname;
+
+    if (indexp) {
+        *indexp = 1;
+    }
+
     if (dp_arg_exists(argc, argv)) {
         dpname = xstrdup(argv[1]);
+        if (indexp) {
+            *indexp = 2;
+        }
     } else if (argc != max_args) {
         dpname = get_one_dp(dpctl_p);
     } else {
@@ -897,7 +906,7 @@ dpctl_dump_flows(int argc, const char *argv[], struct dpctl_params *dpctl_p)
         }
     }
 
-    error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif);
+    error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif, NULL);
     if (error) {
         goto out_free;
     }
@@ -1024,7 +1033,7 @@ dpctl_put_flow(int argc, const char *argv[], enum dpif_flow_put_flags flags,
     struct simap port_names;
     int n, error;
 
-    error = opt_dpif_open(argc, argv, dpctl_p, 4, &dpif);
+    error = opt_dpif_open(argc, argv, dpctl_p, 4, &dpif, NULL);
     if (error) {
         return error;
     }
@@ -1126,7 +1135,7 @@ dpctl_get_flow(int argc, const char *argv[], struct dpctl_params *dpctl_p)
     struct ds ds;
     int n, error;
 
-    error = opt_dpif_open(argc, argv, dpctl_p, 3, &dpif);
+    error = opt_dpif_open(argc, argv, dpctl_p, 3, &dpif, NULL);
     if (error) {
         return error;
     }
@@ -1175,7 +1184,7 @@ dpctl_del_flow(int argc, const char *argv[], struct dpctl_params *dpctl_p)
     struct simap port_names;
     int n, error;
 
-    error = opt_dpif_open(argc, argv, dpctl_p, 3, &dpif);
+    error = opt_dpif_open(argc, argv, dpctl_p, 3, &dpif, NULL);
     if (error) {
         return error;
     }
@@ -1244,7 +1253,7 @@ dpctl_del_flows(int argc, const char *argv[], struct dpctl_params *dpctl_p)
 {
     struct dpif *dpif;
 
-    int error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif);
+    int error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif, NULL);
     if (error) {
         return error;
     }
@@ -1305,7 +1314,7 @@ dpctl_dump_conntrack(int argc, const char *argv[],
         argc--;
     }
 
-    error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif);
+    error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif, NULL);
     if (error) {
         return error;
     }
@@ -1369,7 +1378,7 @@ dpctl_flush_conntrack(int argc, const char *argv[],
         goto error;
     }
 
-    error = opt_dpif_open(argc, argv, dpctl_p, 4, &dpif);
+    error = opt_dpif_open(argc, argv, dpctl_p, 4, &dpif, NULL);
     if (error) {
         return error;
     }
@@ -1420,7 +1429,7 @@ dpctl_ct_stats_show(int argc, const char *argv[],
         }
     }
 
-    error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif);
+    error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif, NULL);
     if (error) {
         return error;
     }
@@ -1545,7 +1554,7 @@ dpctl_ct_bkts(int argc, const char *argv[],
         }
     }
 
-    error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif);
+    error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif, NULL);
     if (error) {
         return error;
     }
@@ -1625,7 +1634,7 @@ dpctl_ct_set_maxconns(int argc, const char *argv[],
                       struct dpctl_params *dpctl_p)
 {
     struct dpif *dpif;
-    int error = opt_dpif_open(argc, argv, dpctl_p, 3, &dpif);
+    int error = opt_dpif_open(argc, argv, dpctl_p, 3, &dpif, NULL);
     if (!error) {
         uint32_t maxconns;
         if (ovs_scan(argv[argc - 1], "%"SCNu32, &maxconns)) {
@@ -1651,7 +1660,7 @@ dpctl_ct_get_maxconns(int argc, const char *argv[],
                     struct dpctl_params *dpctl_p)
 {
     struct dpif *dpif;
-    int error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif);
+    int error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif, NULL);
     if (!error) {
         uint32_t maxconns;
         error = ct_dpif_get_maxconns(dpif, &maxconns);
@@ -1672,7 +1681,7 @@ dpctl_ct_get_nconns(int argc, const char *argv[],
                     struct dpctl_params *dpctl_p)
 {
     struct dpif *dpif;
-    int error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif);
+    int error = opt_dpif_open(argc, argv, dpctl_p, 2, &dpif, NULL);
     if (!error) {
         uint32_t nconns;
         error = ct_dpif_get_nconns(dpif, &nconns);
@@ -1685,6 +1694,169 @@ dpctl_ct_get_nconns(int argc, const char *argv[],
         dpif_close(dpif);
     }
 
+    return error;
+}
+
+static int
+dpctl_ct_set_limits(int argc, const char *argv[],
+                    struct dpctl_params *dpctl_p)
+{
+    struct dpif *dpif;
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    int i = 1;
+    uint32_t default_limit, *p_default_limit = NULL;
+    struct ovs_list zone_limits = OVS_LIST_INITIALIZER(&zone_limits);
+
+    int error = opt_dpif_open(argc, argv, dpctl_p, INT_MAX, &dpif, &i);
+    if (error) {
+        return error;
+    }
+
+    /* Parse default limit */
+    if (!strncmp(argv[i], "default=", 8)) {
+        if (ovs_scan(argv[i], "default=%"SCNu32, &default_limit)) {
+            p_default_limit = &default_limit;
+            i++;
+        } else {
+            ds_put_cstr(&ds, "invalid default limit");
+            error = EINVAL;
+            goto error;
+        }
+    }
+
+    /* Parse ct zone limit tuples */
+    while (i < argc) {
+        uint16_t zone;
+        uint32_t limit;
+        if (!ct_dpif_parse_zone_limit_tuple(argv[i++], &zone, &limit, &ds)) {
+            error = EINVAL;
+            goto error;
+        }
+        ct_dpif_push_zone_limit(&zone_limits, zone, limit, 0);
+    }
+
+    error = ct_dpif_set_limits(dpif, p_default_limit, &zone_limits);
+    if (!error) {
+        ct_dpif_free_zone_limits(&zone_limits);
+        dpif_close(dpif);
+        return 0;
+    } else {
+        ds_put_cstr(&ds, "failed to set conntrack limit");
+    }
+
+error:
+    dpctl_error(dpctl_p, error, "%s", ds_cstr(&ds));
+    ds_destroy(&ds);
+    ct_dpif_free_zone_limits(&zone_limits);
+    dpif_close(dpif);
+    return error;
+}
+
+static int
+parse_ct_limit_zones(const char *argv, struct ovs_list *zone_limits,
+                     struct ds *ds)
+{
+    char *save_ptr = NULL, *argcopy, *next_zone;
+    uint16_t zone;
+
+    if (strncmp(argv, "zone=", 5)) {
+        ds_put_format(ds, "invalid argument %s", argv);
+        return EINVAL;
+    }
+
+    argcopy = xstrdup(argv + 5);
+    next_zone = strtok_r(argcopy, ",", &save_ptr);
+
+    do {
+        if (ovs_scan(next_zone, "%"SCNu16, &zone)) {
+            ct_dpif_push_zone_limit(zone_limits, zone, 0, 0);
+        } else {
+            ds_put_cstr(ds, "invalid zone");
+            free(argcopy);
+            return EINVAL;
+        }
+    } while ((next_zone = strtok_r(NULL, ",", &save_ptr)) != NULL);
+
+    free(argcopy);
+    return 0;
+}
+
+static int
+dpctl_ct_del_limits(int argc, const char *argv[],
+                    struct dpctl_params *dpctl_p)
+{
+    struct dpif *dpif;
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    int error, i = 1;
+    struct ovs_list zone_limits = OVS_LIST_INITIALIZER(&zone_limits);
+
+    error = opt_dpif_open(argc, argv, dpctl_p, 3, &dpif, &i);
+    if (error) {
+        return error;
+    }
+
+    error = parse_ct_limit_zones(argv[i], &zone_limits, &ds);
+    if (error) {
+        goto error;
+    }
+
+    error = ct_dpif_del_limits(dpif, &zone_limits);
+    if (!error) {
+        goto out;
+    } else {
+        ds_put_cstr(&ds, "failed to delete conntrack limit");
+    }
+
+error:
+    dpctl_error(dpctl_p, error, "%s", ds_cstr(&ds));
+    ds_destroy(&ds);
+out:
+    ct_dpif_free_zone_limits(&zone_limits);
+    dpif_close(dpif);
+    return error;
+}
+
+static int
+dpctl_ct_get_limits(int argc, const char *argv[],
+                    struct dpctl_params *dpctl_p)
+{
+    struct dpif *dpif;
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    uint32_t default_limit;
+    int i = 1;
+    struct ovs_list list_query = OVS_LIST_INITIALIZER(&list_query);
+    struct ovs_list list_reply = OVS_LIST_INITIALIZER(&list_reply);
+
+    int error = opt_dpif_open(argc, argv, dpctl_p, 3, &dpif, &i);
+    if (error) {
+        return error;
+    }
+
+    if (argc > i) {
+        error = parse_ct_limit_zones(argv[i], &list_query, &ds);
+        if (error) {
+            goto error;
+        }
+    }
+
+    error = ct_dpif_get_limits(dpif, &default_limit, &list_query,
+                               &list_reply);
+    if (!error) {
+        ct_dpif_format_zone_limits(default_limit, &list_reply, &ds);
+        dpctl_print(dpctl_p, "%s\n", ds_cstr(&ds));
+        goto out;
+    } else {
+        ds_put_format(&ds, "failed to get conntrack limit %s",
+                      ovs_strerror(error));
+    }
+
+error:
+    dpctl_error(dpctl_p, error, "%s", ds_cstr(&ds));
+out:
+    ds_destroy(&ds);
+    ct_dpif_free_zone_limits(&list_query);
+    ct_dpif_free_zone_limits(&list_reply);
+    dpif_close(dpif);
     return error;
 }
 
@@ -1987,6 +2159,12 @@ static const struct dpctl_command all_commands[] = {
     { "ct-set-maxconns", "[dp] maxconns", 1, 2, dpctl_ct_set_maxconns, DP_RW },
     { "ct-get-maxconns", "[dp]", 0, 1, dpctl_ct_get_maxconns, DP_RO },
     { "ct-get-nconns", "[dp]", 0, 1, dpctl_ct_get_nconns, DP_RO },
+    { "ct-set-limits", "[dp] [default=L] [zone=N,limit=L]...", 1, INT_MAX,
+        dpctl_ct_set_limits, DP_RO },
+    { "ct-del-limits", "[dp] zone=N1[,N2]...", 1, 2, dpctl_ct_del_limits,
+        DP_RO },
+    { "ct-get-limits", "[dp] [zone=N1[,N2]...]", 0, 2, dpctl_ct_get_limits,
+        DP_RO },
     { "help", "", 0, INT_MAX, dpctl_help, DP_RO },
     { "list-commands", "", 0, INT_MAX, dpctl_list_commands, DP_RO },
 
