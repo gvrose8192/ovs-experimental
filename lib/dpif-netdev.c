@@ -5199,44 +5199,42 @@ dpif_netdev_meter_set(struct dpif *dpif, ofproto_meter_id meter_id,
     /* Allocate meter */
     meter = xzalloc(sizeof *meter
                     + config->n_bands * sizeof(struct dp_meter_band));
-    if (meter) {
-        meter->flags = config->flags;
-        meter->n_bands = config->n_bands;
-        meter->max_delta_t = 0;
-        meter->used = time_usec();
 
-        /* set up bands */
-        for (i = 0; i < config->n_bands; ++i) {
-            uint32_t band_max_delta_t;
+    meter->flags = config->flags;
+    meter->n_bands = config->n_bands;
+    meter->max_delta_t = 0;
+    meter->used = time_usec();
 
-            /* Set burst size to a workable value if none specified. */
-            if (config->bands[i].burst_size == 0) {
-                config->bands[i].burst_size = config->bands[i].rate;
-            }
+    /* set up bands */
+    for (i = 0; i < config->n_bands; ++i) {
+        uint32_t band_max_delta_t;
 
-            meter->bands[i].up = config->bands[i];
-            /* Convert burst size to the bucket units: */
-            /* pkts => 1/1000 packets, kilobits => bits. */
-            meter->bands[i].up.burst_size *= 1000;
-            /* Initialize bucket to empty. */
-            meter->bands[i].bucket = 0;
-
-            /* Figure out max delta_t that is enough to fill any bucket. */
-            band_max_delta_t
-                = meter->bands[i].up.burst_size / meter->bands[i].up.rate;
-            if (band_max_delta_t > meter->max_delta_t) {
-                meter->max_delta_t = band_max_delta_t;
-            }
+        /* Set burst size to a workable value if none specified. */
+        if (config->bands[i].burst_size == 0) {
+            config->bands[i].burst_size = config->bands[i].rate;
         }
 
-        meter_lock(dp, mid);
-        dp_delete_meter(dp, mid); /* Free existing meter, if any */
-        dp->meters[mid] = meter;
-        meter_unlock(dp, mid);
+        meter->bands[i].up = config->bands[i];
+        /* Convert burst size to the bucket units: */
+        /* pkts => 1/1000 packets, kilobits => bits. */
+        meter->bands[i].up.burst_size *= 1000;
+        /* Initialize bucket to empty. */
+        meter->bands[i].bucket = 0;
 
-        return 0;
+        /* Figure out max delta_t that is enough to fill any bucket. */
+        band_max_delta_t
+            = meter->bands[i].up.burst_size / meter->bands[i].up.rate;
+        if (band_max_delta_t > meter->max_delta_t) {
+            meter->max_delta_t = band_max_delta_t;
+        }
     }
-    return ENOMEM;
+
+    meter_lock(dp, mid);
+    dp_delete_meter(dp, mid); /* Free existing meter, if any */
+    dp->meters[mid] = meter;
+    meter_unlock(dp, mid);
+
+    return 0;
 }
 
 static int
@@ -5245,20 +5243,22 @@ dpif_netdev_meter_get(const struct dpif *dpif,
                       struct ofputil_meter_stats *stats, uint16_t n_bands)
 {
     const struct dp_netdev *dp = get_dp_netdev(dpif);
-    const struct dp_meter *meter;
     uint32_t meter_id = meter_id_.uint32;
+    int retval = 0;
 
     if (meter_id >= MAX_METERS) {
         return EFBIG;
     }
-    meter = dp->meters[meter_id];
+
+    meter_lock(dp, meter_id);
+    const struct dp_meter *meter = dp->meters[meter_id];
     if (!meter) {
-        return ENOENT;
+        retval = ENOENT;
+        goto done;
     }
     if (stats) {
         int i = 0;
 
-        meter_lock(dp, meter_id);
         stats->packet_in_count = meter->packet_count;
         stats->byte_in_count = meter->byte_count;
 
@@ -5266,11 +5266,13 @@ dpif_netdev_meter_get(const struct dpif *dpif,
             stats->bands[i].packet_count = meter->bands[i].packet_count;
             stats->bands[i].byte_count = meter->bands[i].byte_count;
         }
-        meter_unlock(dp, meter_id);
 
         stats->n_bands = i;
     }
-    return 0;
+
+done:
+    meter_unlock(dp, meter_id);
+    return retval;
 }
 
 static int
