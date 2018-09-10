@@ -446,6 +446,10 @@ parse_tc_flower_to_match(struct tc_flower *flower,
             match_set_dl_type(match, key->encap_eth_type[0]);
         }
         flow_fix_vlan_tpid(&match->flow);
+    } else if (eth_type_mpls(key->eth_type)) {
+        match->flow.mpls_lse[0] = key->mpls_lse & mask->mpls_lse;
+        match->wc.masks.mpls_lse[0] = mask->mpls_lse;
+        match_set_dl_type(match, key->encap_eth_type[0]);
     } else {
         match_set_dl_type(match, key->eth_type);
     }
@@ -500,24 +504,26 @@ parse_tc_flower_to_match(struct tc_flower *flower,
         }
     }
 
-    if (flower->tunnel.tunnel) {
-        match_set_tun_id(match, flower->tunnel.id);
-        if (flower->tunnel.ipv4.ipv4_dst) {
-            match_set_tun_src(match, flower->tunnel.ipv4.ipv4_src);
-            match_set_tun_dst(match, flower->tunnel.ipv4.ipv4_dst);
-        } else if (!is_all_zeros(&flower->tunnel.ipv6.ipv6_dst,
-                   sizeof flower->tunnel.ipv6.ipv6_dst)) {
-            match_set_tun_ipv6_src(match, &flower->tunnel.ipv6.ipv6_src);
-            match_set_tun_ipv6_dst(match, &flower->tunnel.ipv6.ipv6_dst);
+    if (flower->tunnel) {
+        match_set_tun_id(match, flower->key.tunnel.id);
+        if (flower->key.tunnel.ipv4.ipv4_dst) {
+            match_set_tun_src(match, flower->key.tunnel.ipv4.ipv4_src);
+            match_set_tun_dst(match, flower->key.tunnel.ipv4.ipv4_dst);
+        } else if (!is_all_zeros(&flower->key.tunnel.ipv6.ipv6_dst,
+                   sizeof flower->key.tunnel.ipv6.ipv6_dst)) {
+            match_set_tun_ipv6_src(match, &flower->key.tunnel.ipv6.ipv6_src);
+            match_set_tun_ipv6_dst(match, &flower->key.tunnel.ipv6.ipv6_dst);
         }
-        if (flower->tunnel.tos) {
-            match_set_tun_tos(match, flower->tunnel.tos);
+        if (flower->key.tunnel.tos) {
+            match_set_tun_tos_masked(match, flower->key.tunnel.tos,
+                                     flower->mask.tunnel.tos);
         }
-        if (flower->tunnel.ttl) {
-            match_set_tun_ttl(match, flower->tunnel.ttl);
+        if (flower->key.tunnel.ttl) {
+            match_set_tun_ttl_masked(match, flower->key.tunnel.ttl,
+                                     flower->mask.tunnel.ttl);
         }
-        if (flower->tunnel.tp_dst) {
-            match_set_tun_tp_dst(match, flower->tunnel.tp_dst);
+        if (flower->key.tunnel.tp_dst) {
+            match_set_tun_tp_dst(match, flower->key.tunnel.tp_dst);
         }
     }
 
@@ -875,9 +881,9 @@ test_key_and_mask(struct match *match)
         return EOPNOTSUPP;
     }
 
-    for (int i = 0; i < FLOW_MAX_MPLS_LABELS; i++) {
+    for (int i = 1; i < FLOW_MAX_MPLS_LABELS; i++) {
         if (mask->mpls_lse[i]) {
-            VLOG_DBG_RL(&rl, "offloading attribute mpls_lse isn't supported");
+            VLOG_DBG_RL(&rl, "offloading multiple mpls_lses isn't supported");
             return EOPNOTSUPP;
         }
     }
@@ -918,6 +924,10 @@ test_key_and_mask(struct match *match)
                         "offloading attribute icmp_code isn't supported");
             return EOPNOTSUPP;
         }
+    } else if (key->dl_type == htons(OFP_DL_TYPE_NOT_ETH_TYPE)) {
+        VLOG_DBG_RL(&rl,
+                    "offloading of non-ethernet packets isn't supported");
+        return EOPNOTSUPP;
     }
 
     if (!is_all_zeros(mask, sizeof *mask)) {
@@ -939,6 +949,7 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
     const struct flow *key = &match->flow;
     struct flow *mask = &match->wc.masks;
     const struct flow_tnl *tnl = &match->flow.tunnel;
+    const struct flow_tnl *tnl_mask = &mask->tunnel;
     struct tc_action *action;
     uint32_t block_id = 0;
     struct nlattr *nla;
@@ -964,21 +975,29 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
                     ntohll(tnl->tun_id),
                     IP_ARGS(tnl->ip_src), IP_ARGS(tnl->ip_dst),
                     ntohs(tnl->tp_src), ntohs(tnl->tp_dst));
-        flower.tunnel.id = tnl->tun_id;
-        flower.tunnel.ipv4.ipv4_src = tnl->ip_src;
-        flower.tunnel.ipv4.ipv4_dst = tnl->ip_dst;
-        flower.tunnel.ipv6.ipv6_src = tnl->ipv6_src;
-        flower.tunnel.ipv6.ipv6_dst = tnl->ipv6_dst;
-        flower.tunnel.tos = tnl->ip_tos;
-        flower.tunnel.ttl = tnl->ip_ttl;
-        flower.tunnel.tp_src = tnl->tp_src;
-        flower.tunnel.tp_dst = tnl->tp_dst;
-        flower.tunnel.tunnel = true;
+        flower.key.tunnel.id = tnl->tun_id;
+        flower.key.tunnel.ipv4.ipv4_src = tnl->ip_src;
+        flower.key.tunnel.ipv4.ipv4_dst = tnl->ip_dst;
+        flower.key.tunnel.ipv6.ipv6_src = tnl->ipv6_src;
+        flower.key.tunnel.ipv6.ipv6_dst = tnl->ipv6_dst;
+        flower.key.tunnel.tos = tnl->ip_tos;
+        flower.key.tunnel.ttl = tnl->ip_ttl;
+        flower.key.tunnel.tp_src = tnl->tp_src;
+        flower.key.tunnel.tp_dst = tnl->tp_dst;
+        flower.mask.tunnel.tos = tnl_mask->ip_tos;
+        flower.mask.tunnel.ttl = tnl_mask->ip_ttl;
+        flower.tunnel = true;
     }
     memset(&mask->tunnel, 0, sizeof mask->tunnel);
 
     flower.key.eth_type = key->dl_type;
     flower.mask.eth_type = mask->dl_type;
+    if (mask->mpls_lse[0]) {
+        flower.key.mpls_lse = key->mpls_lse[0];
+        flower.mask.mpls_lse = mask->mpls_lse[0];
+        flower.key.encap_eth_type[0] = flower.key.eth_type;
+    }
+    mask->mpls_lse[0] = 0;
 
     if (mask->vlans[0].tci) {
         ovs_be16 vid_mask = mask->vlans[0].tci & htons(VLAN_VID_MASK);
