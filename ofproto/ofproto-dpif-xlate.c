@@ -3068,7 +3068,7 @@ compose_sample_action(struct xlate_ctx *ctx,
     /* When meter action is not required, avoid generate sample action
      * for 100% sampling rate.  */
     bool is_sample = probability < UINT32_MAX || meter_id != UINT32_MAX;
-    size_t sample_offset, actions_offset;
+    size_t sample_offset = 0, actions_offset = 0;
     if (is_sample) {
         sample_offset = nl_msg_start_nested(ctx->odp_actions,
                                             OVS_ACTION_ATTR_SAMPLE);
@@ -3084,8 +3084,7 @@ compose_sample_action(struct xlate_ctx *ctx,
 
     odp_port_t odp_port = ofp_port_to_odp_port(
         ctx->xbridge, ctx->xin->flow.in_port.ofp_port);
-    uint32_t pid = dpif_port_get_pid(ctx->xbridge->dpif, odp_port,
-                                     flow_hash_5tuple(&ctx->xin->flow, 0));
+    uint32_t pid = dpif_port_get_pid(ctx->xbridge->dpif, odp_port);
     size_t cookie_offset = odp_put_userspace_action(pid, cookie,
                                                     sizeof *cookie,
                                                     tunnel_out_port,
@@ -4463,6 +4462,7 @@ pick_select_group(struct xlate_ctx *ctx, struct group_dpif *group)
      */
     if (ctx->was_mpls) {
         ctx_trigger_freeze(ctx);
+        return NULL;
     }
 
     switch (group->selection_method) {
@@ -4637,8 +4637,7 @@ put_controller_user_action(struct xlate_ctx *ctx,
 
     odp_port_t odp_port = ofp_port_to_odp_port(ctx->xbridge,
                                              ctx->xin->flow.in_port.ofp_port);
-    uint32_t pid = dpif_port_get_pid(ctx->xbridge->dpif, odp_port,
-                                     flow_hash_5tuple(&ctx->xin->flow, 0));
+    uint32_t pid = dpif_port_get_pid(ctx->xbridge->dpif, odp_port);
     odp_put_userspace_action(pid, &cookie, sizeof cookie, ODPP_NONE,
                              false, ctx->odp_actions);
 }
@@ -7464,19 +7463,22 @@ enum ofperr
 xlate_resume(struct ofproto_dpif *ofproto,
              const struct ofputil_packet_in_private *pin,
              struct ofpbuf *odp_actions,
-             enum slow_path_reason *slow)
+             enum slow_path_reason *slow,
+             struct flow *flow,
+             struct xlate_cache *xcache)
 {
     struct dp_packet packet;
     dp_packet_use_const(&packet, pin->base.packet,
                         pin->base.packet_len);
 
-    struct flow flow;
-    flow_extract(&packet, &flow);
+    pkt_metadata_from_flow(&packet.md, &pin->base.flow_metadata.flow);
+    flow_extract(&packet, flow);
 
     struct xlate_in xin;
     xlate_in_init(&xin, ofproto, ofproto_dpif_get_tables_version(ofproto),
-                  &flow, 0, NULL, ntohs(flow.tcp_flags),
+                  flow, 0, NULL, ntohs(flow->tcp_flags),
                   &packet, NULL, odp_actions);
+    xin.xcache = xcache;
 
     struct ofpact_note noop;
     ofpact_init_NOTE(&noop);
