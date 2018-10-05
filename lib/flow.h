@@ -241,6 +241,7 @@ uint32_t flow_hash_symmetric_l4(const struct flow *flow, uint32_t basis);
 uint32_t flow_hash_symmetric_l2(const struct flow *flow, uint32_t basis);
 uint32_t flow_hash_symmetric_l3l4(const struct flow *flow, uint32_t basis,
                          bool inc_udp_ports );
+uint32_t flow_hash_symmetric_l3(const struct flow *flow, uint32_t basis);
 
 /* Initialize a flow with random fields that matter for nx_hash_fields. */
 void flow_random_hash_fields(struct flow *);
@@ -1185,6 +1186,28 @@ static inline bool is_stp(const struct flow *flow)
 {
     return (flow->dl_type == htons(FLOW_DL_TYPE_NONE)
             && eth_addr_equals(flow->dl_dst, eth_addr_stp));
+}
+
+/* Returns true if flow->tp_dst equals 'port'.  If 'wc' is nonnull, sets
+ * appropriate bits in wc->masks.tp_dst to account for the test.
+ *
+ * The caller must already have ensured that 'flow' is a protocol for which
+ * tp_dst is relevant. */
+static inline bool tp_dst_equals(const struct flow *flow, uint16_t port,
+                                 struct flow_wildcards *wc)
+{
+    uint16_t diff = port ^ ntohs(flow->tp_dst);
+    if (wc) {
+        if (diff) {
+            /* Set mask for the most significant mismatching bit. */
+            int ofs = raw_clz64((uint64_t) diff << 48); /* range [0,15] */
+            wc->masks.tp_dst |= htons(0x8000 >> ofs);
+        } else {
+            /* Must match all bits. */
+            wc->masks.tp_dst = OVS_BE16_MAX;
+        }
+    }
+    return !diff;
 }
 
 #endif /* flow.h */
