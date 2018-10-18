@@ -2362,9 +2362,8 @@ ofport_open(struct ofproto *ofproto,
     return netdev;
 }
 
-/* Returns true if most fields of 'a' and 'b' are equal.  Differences in name,
- * port number, and 'config' bits other than OFPUTIL_PC_PORT_DOWN are
- * disregarded. */
+/* Returns true if most fields of 'a' and 'b' are equal.  Differences in name
+ * and port number are disregarded. */
 static bool
 ofport_equal(const struct ofputil_phy_port *a,
              const struct ofputil_phy_port *b)
@@ -2372,7 +2371,7 @@ ofport_equal(const struct ofputil_phy_port *a,
     return (eth_addr_equals(a->hw_addr, b->hw_addr)
             && eth_addr64_equals(a->hw_addr64, b->hw_addr64)
             && a->state == b->state
-            && !((a->config ^ b->config) & OFPUTIL_PC_PORT_DOWN)
+            && a->config == b->config
             && a->curr == b->curr
             && a->advertised == b->advertised
             && a->supported == b->supported
@@ -2404,6 +2403,7 @@ ofport_install(struct ofproto *p,
     ofport->pp = *pp;
     ofport->ofp_port = pp->port_no;
     ofport->created = time_msec();
+    ofport->may_enable = false;
 
     /* Add port to 'p'. */
     hmap_insert(&p->ports, &ofport->hmap_node,
@@ -2417,7 +2417,7 @@ ofport_install(struct ofproto *p,
     if (error) {
         goto error;
     }
-    connmgr_send_port_status(p->connmgr, NULL, pp, OFPPR_ADD);
+    connmgr_send_port_status(p->connmgr, NULL, NULL, pp, OFPPR_ADD);
     return 0;
 
 error:
@@ -2438,7 +2438,7 @@ ofport_remove(struct ofport *ofport)
     struct ofproto *p = ofport->ofproto;
     bool is_mtu_overridden = ofport_is_mtu_overridden(p, ofport);
 
-    connmgr_send_port_status(ofport->ofproto->connmgr, NULL, &ofport->pp,
+    connmgr_send_port_status(ofport->ofproto->connmgr, NULL, NULL, &ofport->pp,
                              OFPPR_DELETE);
     ofport_destroy(ofport, true);
     if (!is_mtu_overridden) {
@@ -2457,34 +2457,38 @@ ofport_remove_with_name(struct ofproto *ofproto, const char *name)
     }
 }
 
-/* Updates 'port' with new 'pp' description.
- *
- * Does not handle a name or port number change.  The caller must implement
- * such a change as a delete followed by an add.  */
-static void
-ofport_modified(struct ofport *port, struct ofputil_phy_port *pp)
+static enum ofputil_port_state
+normalize_state(enum ofputil_port_config config,
+                enum ofputil_port_state state,
+                bool may_enable)
 {
-    port->pp.hw_addr = pp->hw_addr;
-    port->pp.hw_addr64 = pp->hw_addr64;
-    port->pp.config = ((port->pp.config & ~OFPUTIL_PC_PORT_DOWN)
-                        | (pp->config & OFPUTIL_PC_PORT_DOWN));
-    port->pp.state = ((port->pp.state & ~OFPUTIL_PS_LINK_DOWN)
-                      | (pp->state & OFPUTIL_PS_LINK_DOWN));
-    port->pp.curr = pp->curr;
-    port->pp.advertised = pp->advertised;
-    port->pp.supported = pp->supported;
-    port->pp.peer = pp->peer;
-    port->pp.curr_speed = pp->curr_speed;
-    port->pp.max_speed = pp->max_speed;
+    return (config & OFPUTIL_PC_PORT_DOWN
+            || state & OFPUTIL_PS_LINK_DOWN
+            || !may_enable
+            ? state & ~OFPUTIL_PS_LIVE
+            : state | OFPUTIL_PS_LIVE);
+}
+
+void
+ofproto_port_set_enable(struct ofport *port, bool enable)
+{
+    if (enable != port->may_enable) {
+        port->may_enable = enable;
+        ofproto_port_set_state(port, normalize_state(port->pp.config,
+                                                     port->pp.state,
+                                                     port->may_enable));
+    }
 }
 
 /* Update OpenFlow 'state' in 'port' and notify controller. */
 void
 ofproto_port_set_state(struct ofport *port, enum ofputil_port_state state)
 {
+    state = normalize_state(port->pp.config, state, port->may_enable);
     if (port->pp.state != state) {
+        struct ofputil_phy_port old_pp = port->pp;
         port->pp.state = state;
-        connmgr_send_port_status(port->ofproto->connmgr, NULL,
+        connmgr_send_port_status(port->ofproto->connmgr, NULL, &old_pp,
                                  &port->pp, OFPPR_MODIFY);
     }
 }
@@ -2631,10 +2635,18 @@ update_port(struct ofproto *ofproto, const char *name)
         if (port && !strcmp(netdev_get_name(port->netdev), name)) {
             struct netdev *old_netdev = port->netdev;
 
+            /* ofport_open() only sets OFPUTIL_PC_PORT_DOWN and
+             * OFPUTIL_PS_LINK_DOWN.  Keep the other config and state bits (but
+             * a port that is down cannot be live). */
+            pp.config |= port->pp.config & ~OFPUTIL_PC_PORT_DOWN;
+            pp.state |= port->pp.state & ~OFPUTIL_PS_LINK_DOWN;
+            pp.state = normalize_state(pp.config, pp.state, port->may_enable);
+
             /* 'name' hasn't changed location.  Any properties changed? */
-            bool port_changed = !ofport_equal(&port->pp, &pp);
-            if (port_changed) {
-                ofport_modified(port, &pp);
+            if (!ofport_equal(&port->pp, &pp)) {
+                connmgr_send_port_status(port->ofproto->connmgr, NULL,
+                                         &port->pp, &pp, OFPPR_MODIFY);
+                port->pp = pp;
             }
 
             update_mtu(ofproto, port);
@@ -2647,12 +2659,6 @@ update_port(struct ofproto *ofproto, const char *name)
 
             if (port->ofproto->ofproto_class->port_modified) {
                 port->ofproto->ofproto_class->port_modified(port);
-            }
-
-            /* Send status update, if any port property changed */
-            if (port_changed) {
-                connmgr_send_port_status(port->ofproto->connmgr, NULL,
-                                         &port->pp, OFPPR_MODIFY);
             }
 
             netdev_close(old_netdev);
@@ -3648,11 +3654,15 @@ update_port_config(struct ofconn *ofconn, struct ofport *port,
     }
 
     if (toggle) {
-        enum ofputil_port_config old_config = port->pp.config;
+        struct ofputil_phy_port old_pp = port->pp;
+
         port->pp.config ^= toggle;
-        port->ofproto->ofproto_class->port_reconfigured(port, old_config);
-        connmgr_send_port_status(port->ofproto->connmgr, ofconn, &port->pp,
-                                 OFPPR_MODIFY);
+        port->pp.state = normalize_state(port->pp.config, port->pp.state,
+                                         port->may_enable);
+
+        port->ofproto->ofproto_class->port_reconfigured(port, old_pp.config);
+        connmgr_send_port_status(port->ofproto->connmgr, ofconn, &old_pp,
+                                 &port->pp, OFPPR_MODIFY);
     }
 }
 
