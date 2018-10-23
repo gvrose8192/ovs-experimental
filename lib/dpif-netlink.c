@@ -2030,7 +2030,23 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
 
         VLOG_DBG("added flow");
     } else if (err != EEXIST) {
-        VLOG_ERR_RL(&rl, "failed to offload flow: %s", ovs_strerror(err));
+        struct netdev *oor_netdev = NULL;
+        if (err == ENOSPC && netdev_is_offload_rebalance_policy_enabled()) {
+            /*
+             * We need to set OOR on the input netdev (i.e, 'dev') for the
+             * flow. But if the flow has a tunnel attribute (i.e, decap action,
+             * with a virtual device like a VxLAN interface as its in-port),
+             * then lookup and set OOR on the underlying tunnel (real) netdev.
+             */
+            oor_netdev = flow_get_tunnel_netdev(&match.flow.tunnel);
+            if (!oor_netdev) {
+                /* Not a 'tunnel' flow */
+                oor_netdev = dev;
+            }
+            netdev_set_hw_info(oor_netdev, HW_INFO_TYPE_OOR, true);
+        }
+        VLOG_ERR_RL(&rl, "failed to offload flow: %s: %s", ovs_strerror(err),
+                    (oor_netdev ? oor_netdev->name : dev->name));
     }
 
 out:
@@ -2117,7 +2133,8 @@ dpif_netlink_operate_chunks(struct dpif_netlink *dpif, struct dpif_op **ops,
 }
 
 static void
-dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops)
+dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops,
+                     enum dpif_offload_type offload_type)
 {
     struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
     struct dpif_op *new_ops[OPERATE_MAX_OPS];
@@ -2125,7 +2142,12 @@ dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops)
     int i = 0;
     int err = 0;
 
-    if (netdev_is_flow_api_enabled()) {
+    if (offload_type == DPIF_OFFLOAD_ALWAYS && !netdev_is_flow_api_enabled()) {
+        VLOG_DBG("Invalid offload_type: %d", offload_type);
+        return;
+    }
+
+    if (offload_type != DPIF_OFFLOAD_NEVER && netdev_is_flow_api_enabled()) {
         while (n_ops > 0) {
             count = 0;
 
@@ -2134,6 +2156,23 @@ dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops)
 
                 err = try_send_to_netdev(dpif, op);
                 if (err && err != EEXIST) {
+                    if (offload_type == DPIF_OFFLOAD_ALWAYS) {
+                        /* We got an error while offloading an op. Since
+                         * OFFLOAD_ALWAYS is specified, we stop further
+                         * processing and return to the caller without
+                         * invoking kernel datapath as fallback. But the
+                         * interface requires us to process all n_ops; so
+                         * return the same error in the remaining ops too.
+                         */
+                        op->error = err;
+                        n_ops--;
+                        while (n_ops > 0) {
+                            op = ops[i++];
+                            op->error = err;
+                            n_ops--;
+                        }
+                        return;
+                    }
                     new_ops[count++] = op;
                 } else {
                     op->error = err;
@@ -2144,7 +2183,7 @@ dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops)
 
             dpif_netlink_operate_chunks(dpif, new_ops, count);
         }
-    } else {
+    } else if (offload_type != DPIF_OFFLOAD_ALWAYS) {
         dpif_netlink_operate_chunks(dpif, ops, n_ops);
     }
 }
