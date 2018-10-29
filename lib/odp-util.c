@@ -1915,8 +1915,8 @@ find_end:
 
                     s += n;
                     retval = scan_u128(s, &ct_label.value, &ct_label.mask);
-                    if (retval < 0) {
-                        return retval;
+                    if (retval == 0) {
+                        return -EINVAL;
                     }
                     s += retval;
                     continue;
@@ -2558,6 +2558,8 @@ odp_nsh_hdr_from_attr(const struct nlattr *attr,
     size_t mdlen = 0;
     bool has_md1 = false;
     bool has_md2 = false;
+
+    memset(nsh_hdr, 0, size);
 
     NL_NESTED_FOR_EACH (a, left, attr) {
         uint16_t type = nl_attr_type(a);
@@ -4804,10 +4806,15 @@ scan_vxlan_gbp(const char *s, uint32_t *key, uint32_t *mask)
     const char *s_base = s;
     ovs_be16 id = 0, id_mask = 0;
     uint8_t flags = 0, flags_mask = 0;
+    int len;
 
     if (!strncmp(s, "id=", 3)) {
         s += 3;
-        s += scan_be16(s, &id, mask ? &id_mask : NULL);
+        len = scan_be16(s, &id, mask ? &id_mask : NULL);
+        if (len == 0) {
+            return -EINVAL;
+        }
+        s += len;
     }
 
     if (s[0] == ',') {
@@ -4815,7 +4822,11 @@ scan_vxlan_gbp(const char *s, uint32_t *key, uint32_t *mask)
     }
     if (!strncmp(s, "flags=", 6)) {
         s += 6;
-        s += scan_u8(s, &flags, mask ? &flags_mask : NULL);
+        len = scan_u8(s, &flags, mask ? &flags_mask : NULL);
+        if (len == 0) {
+            return -EINVAL;
+        }
+        s += len;
     }
 
     if (!strncmp(s, "))", 2)) {
@@ -4841,10 +4852,15 @@ scan_erspan_metadata(const char *s,
     uint32_t idx = 0, idx_mask = 0;
     uint8_t ver = 0, dir = 0, hwid = 0;
     uint8_t ver_mask = 0, dir_mask = 0, hwid_mask = 0;
+    int len;
 
     if (!strncmp(s, "ver=", 4)) {
         s += 4;
-        s += scan_u8(s, &ver, mask ? &ver_mask : NULL);
+        len = scan_u8(s, &ver, mask ? &ver_mask : NULL);
+        if (len == 0) {
+            return -EINVAL;
+        }
+        s += len;
     }
 
     if (s[0] == ',') {
@@ -4854,7 +4870,11 @@ scan_erspan_metadata(const char *s,
     if (ver == 1) {
         if (!strncmp(s, "idx=", 4)) {
             s += 4;
-            s += scan_u32(s, &idx, mask ? &idx_mask : NULL);
+            len = scan_u32(s, &idx, mask ? &idx_mask : NULL);
+            if (len == 0) {
+                return -EINVAL;
+            }
+            s += len;
         }
 
         if (!strncmp(s, ")", 1)) {
@@ -4870,14 +4890,22 @@ scan_erspan_metadata(const char *s,
     } else if (ver == 2) {
         if (!strncmp(s, "dir=", 4)) {
             s += 4;
-            s += scan_u8(s, &dir, mask ? &dir_mask : NULL);
+            len = scan_u8(s, &dir, mask ? &dir_mask : NULL);
+            if (len == 0) {
+                return -EINVAL;
+            }
+            s += len;
         }
         if (s[0] == ',') {
             s++;
         }
         if (!strncmp(s, "hwid=", 5)) {
             s += 5;
-            s += scan_u8(s, &hwid, mask ? &hwid_mask : NULL);
+            len = scan_u8(s, &hwid, mask ? &hwid_mask : NULL);
+            if (len == 0) {
+                return -EINVAL;
+            }
+            s += len;
         }
 
         if (!strncmp(s, ")", 1)) {
@@ -4903,6 +4931,7 @@ scan_geneve(const char *s, struct geneve_scan *key, struct geneve_scan *mask)
     struct geneve_opt *opt = key->d;
     struct geneve_opt *opt_mask = mask ? mask->d : NULL;
     int len_remain = sizeof key->d;
+    int len;
 
     while (s[0] == '{' && len_remain >= sizeof *opt) {
         int data_len = 0;
@@ -4912,8 +4941,12 @@ scan_geneve(const char *s, struct geneve_scan *key, struct geneve_scan *mask)
 
         if (!strncmp(s, "class=", 6)) {
             s += 6;
-            s += scan_be16(s, &opt->opt_class,
-                           mask ? &opt_mask->opt_class : NULL);
+            len = scan_be16(s, &opt->opt_class,
+                            mask ? &opt_mask->opt_class : NULL);
+            if (len == 0) {
+                return -EINVAL;
+            }
+            s += len;
         } else if (mask) {
             memset(&opt_mask->opt_class, 0, sizeof opt_mask->opt_class);
         }
@@ -4923,7 +4956,11 @@ scan_geneve(const char *s, struct geneve_scan *key, struct geneve_scan *mask)
         }
         if (!strncmp(s, "type=", 5)) {
             s += 5;
-            s += scan_u8(s, &opt->type, mask ? &opt_mask->type : NULL);
+            len = scan_u8(s, &opt->type, mask ? &opt_mask->type : NULL);
+            if (len == 0) {
+                return -EINVAL;
+            }
+            s += len;
         } else if (mask) {
             memset(&opt_mask->type, 0, sizeof opt_mask->type);
         }
@@ -4934,7 +4971,11 @@ scan_geneve(const char *s, struct geneve_scan *key, struct geneve_scan *mask)
         if (!strncmp(s, "len=", 4)) {
             uint8_t opt_len, opt_len_mask;
             s += 4;
-            s += scan_u8(s, &opt_len, mask ? &opt_len_mask : NULL);
+            len = scan_u8(s, &opt_len, mask ? &opt_len_mask : NULL);
+            if (len == 0) {
+                return -EINVAL;
+            }
+            s += len;
 
             if (opt_len > 124 || opt_len % 4 || opt_len > len_remain) {
                 return 0;
@@ -4979,7 +5020,7 @@ scan_geneve(const char *s, struct geneve_scan *key, struct geneve_scan *mask)
     }
 
     if (s[0] == ')') {
-        int len = sizeof key->d - len_remain;
+        len = sizeof key->d - len_remain;
 
         s++;
         key->len = len;
@@ -5364,13 +5405,6 @@ static int
 parse_odp_key_mask_attr(const char *s, const struct simap *port_names,
                         struct ofpbuf *key, struct ofpbuf *mask)
 {
-    /* Skip UFID. */
-    ovs_u128 ufid;
-    int ufid_len = odp_ufid_from_string(s, &ufid);
-    if (ufid_len) {
-        return ufid_len;
-    }
-
     SCAN_SINGLE("skb_priority(", uint32_t, u32, OVS_KEY_ATTR_PRIORITY);
     SCAN_SINGLE("skb_mark(", uint32_t, u32, OVS_KEY_ATTR_SKB_MARK);
     SCAN_SINGLE_FULLY_MASKED("recirc_id(", uint32_t, u32,
@@ -5581,6 +5615,17 @@ odp_flow_from_string(const char *s, const struct simap *port_names,
         s += strspn(s, delimiters);
         if (!*s) {
             return 0;
+        }
+
+        /* Skip UFID. */
+        ovs_u128 ufid;
+        retval = odp_ufid_from_string(s, &ufid);
+        if (retval < 0) {
+            key->size = old_size;
+            return -retval;
+        } else if (retval > 0) {
+            s += retval;
+            s += s[0] == ' ' ? 1 : 0;
         }
 
         retval = parse_odp_key_mask_attr(s, port_names, key, mask);
