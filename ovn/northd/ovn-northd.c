@@ -68,6 +68,7 @@ static const char *unixctl_path;
 /* MAC address management (macam) table of "struct eth_addr"s, that holds the
  * MAC addresses allocated by the OVN ipam module. */
 static struct hmap macam = HMAP_INITIALIZER(&macam);
+static struct eth_addr mac_prefix;
 
 #define MAX_OVN_TAGS 4096
 
@@ -931,10 +932,17 @@ ipam_insert_mac(struct eth_addr *ea, bool check)
     }
 
     uint64_t mac64 = eth_addr_to_uint64(*ea);
+    uint64_t prefix;
+
+    if (!eth_addr_is_zero(mac_prefix)) {
+        prefix = eth_addr_to_uint64(mac_prefix);
+    } else {
+        prefix = MAC_ADDR_PREFIX;
+    }
     /* If the new MAC was not assigned by this address management system or
      * check is true and the new MAC is a duplicate, do not insert it into the
      * macam hmap. */
-    if (((mac64 ^ MAC_ADDR_PREFIX) >> 24)
+    if (((mac64 ^ prefix) >> 24)
         || (check && ipam_is_duplicate_mac(ea, mac64, true))) {
         return;
     }
@@ -1034,21 +1042,22 @@ ipam_add_port_addresses(struct ovn_datapath *od, struct ovn_port *op)
 }
 
 static uint64_t
-ipam_get_unused_mac(void)
+ipam_get_unused_mac(ovs_be32 ip)
 {
-    /* Stores the suffix of the most recently ipam-allocated MAC address. */
-    static uint32_t last_mac;
-
-    uint64_t mac64;
+    uint32_t mac_addr_suffix, i, base_addr = ntohl(ip) & MAC_ADDR_SPACE;
     struct eth_addr mac;
-    uint32_t mac_addr_suffix, i;
+    uint64_t mac64;
+
     for (i = 0; i < MAC_ADDR_SPACE - 1; i++) {
         /* The tentative MAC's suffix will be in the interval (1, 0xfffffe). */
-        mac_addr_suffix = ((last_mac + i) % (MAC_ADDR_SPACE - 1)) + 1;
-        mac64 = MAC_ADDR_PREFIX | mac_addr_suffix;
+        mac_addr_suffix = ((base_addr + i) % (MAC_ADDR_SPACE - 1)) + 1;
+        if (!eth_addr_is_zero(mac_prefix)) {
+            mac64 =  eth_addr_to_uint64(mac_prefix) | mac_addr_suffix;
+        } else {
+            mac64 = MAC_ADDR_PREFIX | mac_addr_suffix;
+        }
         eth_addr_from_uint64(mac64, &mac);
-        if (!ipam_is_duplicate_mac(&mac, mac64, false)) {
-            last_mac = mac_addr_suffix;
+        if (!ipam_is_duplicate_mac(&mac, mac64, true)) {
             break;
         }
     }
@@ -1090,6 +1099,7 @@ enum dynamic_update_type {
 struct dynamic_address_update {
     struct ovs_list node;       /* In build_ipam()'s list of updates. */
 
+    struct ovn_datapath *od;
     struct ovn_port *op;
 
     struct lport_addresses current_addresses;
@@ -1116,7 +1126,15 @@ dynamic_mac_changed(const char *lsp_addresses,
    }
 
    uint64_t mac64 = eth_addr_to_uint64(update->current_addresses.ea);
-   if ((mac64 ^ MAC_ADDR_PREFIX) >> 24) {
+   uint64_t prefix;
+
+   if (!eth_addr_is_zero(mac_prefix)) {
+       prefix = eth_addr_to_uint64(mac_prefix);
+   } else {
+       prefix = MAC_ADDR_PREFIX;
+   }
+
+   if ((mac64 ^ prefix) >> 24) {
        return DYNAMIC;
    } else {
        return NONE;
@@ -1273,24 +1291,8 @@ set_dynamic_updates(const char *addrspec,
 }
 
 static void
-update_dynamic_addresses(struct ovn_datapath *od,
-                         struct dynamic_address_update *update)
+update_dynamic_addresses(struct dynamic_address_update *update)
 {
-    struct eth_addr mac;
-    switch (update->mac) {
-    case NONE:
-        mac = update->current_addresses.ea;
-        break;
-    case REMOVE:
-        OVS_NOT_REACHED();
-    case STATIC:
-        mac = update->static_mac;
-        break;
-    case DYNAMIC:
-        eth_addr_from_uint64(ipam_get_unused_mac(), &mac);
-        break;
-    }
-
     ovs_be32 ip4 = 0;
     switch (update->ipv4) {
     case NONE:
@@ -1303,7 +1305,22 @@ update_dynamic_addresses(struct ovn_datapath *od,
     case STATIC:
         OVS_NOT_REACHED();
     case DYNAMIC:
-        ip4 = htonl(ipam_get_unused_ip(od));
+        ip4 = htonl(ipam_get_unused_ip(update->od));
+    }
+
+    struct eth_addr mac;
+    switch (update->mac) {
+    case NONE:
+        mac = update->current_addresses.ea;
+        break;
+    case REMOVE:
+        OVS_NOT_REACHED();
+    case STATIC:
+        mac = update->static_mac;
+        break;
+    case DYNAMIC:
+        eth_addr_from_uint64(ipam_get_unused_mac(ip4), &mac);
+        break;
     }
 
     struct in6_addr ip6 = in6addr_any;
@@ -1318,14 +1335,14 @@ update_dynamic_addresses(struct ovn_datapath *od,
     case STATIC:
         OVS_NOT_REACHED();
     case DYNAMIC:
-        in6_generate_eui64(mac, &od->ipam_info.ipv6_prefix, &ip6);
+        in6_generate_eui64(mac, &update->od->ipam_info.ipv6_prefix, &ip6);
         break;
     }
 
     struct ds new_addr = DS_EMPTY_INITIALIZER;
     ds_put_format(&new_addr, ETH_ADDR_FMT, ETH_ADDR_ARGS(mac));
     if (ip4) {
-        ipam_insert_ip(od, ntohl(ip4));
+        ipam_insert_ip(update->od, ntohl(ip4));
         ds_put_format(&new_addr, " "IP_FMT, IP_ARGS(ip4));
     }
     if (!IN6_ARE_ADDR_EQUAL(&ip6, &in6addr_any)) {
@@ -1351,13 +1368,14 @@ build_ipam(struct hmap *datapaths, struct hmap *ports)
     /* If the switch's other_config:subnet is set, allocate new addresses for
      * ports that have the "dynamic" keyword in their addresses column. */
     struct ovn_datapath *od;
+    struct ovs_list updates;
+
+    ovs_list_init(&updates);
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
             continue;
         }
 
-        struct ovs_list updates;
-        ovs_list_init(&updates);
         for (size_t i = 0; i < od->nbs->n_ports; i++) {
             const struct nbrec_logical_switch_port *nbsp = od->nbs->ports[i];
 
@@ -1394,6 +1412,7 @@ build_ipam(struct hmap *datapaths, struct hmap *ports)
                 struct dynamic_address_update *update
                     = xzalloc(sizeof *update);
                 update->op = op;
+                update->od = od;
                 if (nbsp->dynamic_addresses) {
                     bool any_changed;
                     extract_lsp_addresses(nbsp->dynamic_addresses,
@@ -1420,15 +1439,16 @@ build_ipam(struct hmap *datapaths, struct hmap *ports)
             }
         }
 
-        /* After retaining all unchanged dynamic addresses, now assign
-         * new ones.
-         */
-        struct dynamic_address_update *update;
-        LIST_FOR_EACH_POP (update, node, &updates) {
-            update_dynamic_addresses(od, update);
-            destroy_lport_addresses(&update->current_addresses);
-            free(update);
-        }
+    }
+
+    /* After retaining all unchanged dynamic addresses, now assign
+     * new ones.
+     */
+    struct dynamic_address_update *update;
+    LIST_FOR_EACH_POP (update, node, &updates) {
+        update_dynamic_addresses(update);
+        destroy_lport_addresses(&update->current_addresses);
+        free(update);
     }
 }
 
@@ -2170,6 +2190,8 @@ ovn_port_update_sbrec(struct northd_context *ctx,
 
         struct smap ids = SMAP_INITIALIZER(&ids);
         sbrec_port_binding_set_external_ids(op->sb, &ids);
+
+        sbrec_port_binding_set_nat_addresses(op->sb, NULL, 0);
     } else {
         if (strcmp(op->nbsp->type, "router")) {
             uint32_t queue_id = smap_get_int(
@@ -2202,6 +2224,8 @@ ovn_port_update_sbrec(struct northd_context *ctx,
                     &rl, "Unknown port type '%s' set on logical switch '%s'.",
                     op->nbsp->type, op->nbsp->name);
             }
+
+            sbrec_port_binding_set_nat_addresses(op->sb, NULL, 0);
         } else {
             const char *chassis = NULL;
             if (op->peer && op->peer->od && op->peer->od->nbr) {
@@ -2229,6 +2253,8 @@ ovn_port_update_sbrec(struct northd_context *ctx,
                 }
                 sbrec_port_binding_set_options(op->sb, &new);
                 smap_destroy(&new);
+            } else {
+                sbrec_port_binding_set_options(op->sb, NULL);
             }
 
             const char *nat_addresses = smap_get(&op->nbsp->options,
@@ -3218,7 +3244,7 @@ ip_address_and_port_from_lb_key(const char *key, char **ip_address,
                                 uint16_t *port, int *addr_family)
 {
     struct sockaddr_storage ss;
-    if (!inet_parse_active(key, 0, &ss)) {
+    if (!inet_parse_active(key, 0, &ss, false)) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
         VLOG_WARN_RL(&rl, "bad ip address or port for load balancer key %s",
                      key);
@@ -7149,6 +7175,17 @@ ovnnb_db_run(struct northd_context *ctx,
     sbrec_sb_global_set_nb_cfg(sb, nb->nb_cfg);
     sbrec_sb_global_set_options(sb, &nb->options);
     sb_loop->next_cfg = nb->nb_cfg;
+
+    const char *mac_addr_prefix = smap_get(&nb->options, "mac_prefix");
+    if (mac_addr_prefix) {
+        struct eth_addr addr;
+
+        memset(&addr, 0, sizeof addr);
+        if (ovs_scan(mac_addr_prefix, "%"SCNx8":%"SCNx8":%"SCNx8,
+                     &addr.ea[0], &addr.ea[1], &addr.ea[2])) {
+            mac_prefix = addr;
+        }
+    }
 
     cleanup_macam(&macam);
 }

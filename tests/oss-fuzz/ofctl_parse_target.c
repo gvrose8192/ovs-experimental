@@ -24,7 +24,7 @@ ofctl_parse_flows__(struct ofputil_flow_mod *fms, size_t n_fms,
         printf("no usable protocol\n");
     }
     for (i = 0; i < sizeof(enum ofputil_protocol) * CHAR_BIT; i++) {
-        protocol = 1 << i;
+        protocol = 1u << i;
         if (protocol & usable_protocols & OFPUTIL_P_ANY) {
             break;
         }
@@ -58,6 +58,7 @@ ofctl_parse_flow(const char *input, int command)
                                    command, &usable_protocols);
     if (error) {
         printf("Error encountered: %s\n", error);
+        free(error);
     } else {
         ofctl_parse_flows__(&fm, 1, usable_protocols);
     }
