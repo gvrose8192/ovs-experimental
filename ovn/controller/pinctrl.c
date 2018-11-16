@@ -229,7 +229,7 @@ destroy_buffered_packets(struct buffered_packets *bp)
 
     while (bp->head != bp->tail) {
         bi = &bp->data[bp->head];
-        dp_packet_uninit(bi->p);
+        dp_packet_delete(bi->p);
         ofpbuf_uninit(&bi->ofpacts);
 
         bp->head = (bp->head + 1) % BUFFER_QUEUE_DEPTH;
@@ -241,8 +241,8 @@ destroy_buffered_packets(struct buffered_packets *bp)
 static void
 destroy_buffered_packets_map(void)
 {
-    struct buffered_packets *bp;
-    HMAP_FOR_EACH_POP (bp, hmap_node, &buffered_packets_map) {
+    struct buffered_packets *bp, *next;
+    HMAP_FOR_EACH_SAFE (bp, next, hmap_node, &buffered_packets_map) {
         destroy_buffered_packets(bp);
     }
     hmap_destroy(&buffered_packets_map);
@@ -267,7 +267,7 @@ buffered_push_packet(struct buffered_packets *bp,
 
     if (next == bp->head) {
         bi = &bp->data[bp->head];
-        dp_packet_uninit(bi->p);
+        dp_packet_delete(bi->p);
         ofpbuf_uninit(&bi->ofpacts);
         bp->head = (bp->head + 1) % BUFFER_QUEUE_DEPTH;
     }
@@ -296,7 +296,7 @@ buffered_send_packets(struct buffered_packets *bp, struct eth_addr *addr)
         queue_msg(ofputil_encode_packet_out(&po, proto));
 
         ofpbuf_uninit(&bi->ofpacts);
-        dp_packet_uninit(bi->p);
+        dp_packet_delete(bi->p);
 
         bp->head = (bp->head + 1) % BUFFER_QUEUE_DEPTH;
     }

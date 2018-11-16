@@ -7,6 +7,7 @@ Post-v2.10.0
    - The environment variable OVS_CTL_TIMEOUT, if set, is now used
      as the default timeout for control utilities.
    - ovn:
+     * New support for IPSEC encrypted tunnels between hypervisors.
      * ovn-ctl: allow passing user:group ids to the OVN daemons.
    - DPDK:
      * Add option for simple round-robin based Rxq to PMD assignment.
@@ -16,6 +17,8 @@ Post-v2.10.0
    - ovs-vswitchd:
      * New configuration option "offload-rebalance", that enables dynamic
        rebalancing of offloaded flows.
+   - The environment variable OVS_RESOLV_CONF, if set, is now used
+     as the DNS server configuration file.
 
 v2.10.0 - 18 Aug 2018
 ---------------------
