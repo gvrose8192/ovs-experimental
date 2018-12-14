@@ -104,6 +104,7 @@ Darrell Ball                       dlu998@gmail.com
 Dave Tucker                        dave@dtucker.co.uk
 David Erickson                     derickso@stanford.edu
 David Hill                         dhill@redhat.com
+David Marchand                     david.marchand@redhat.com
 David S. Miller                    davem@davemloft.net
 David Yang                         davidy@vmware.com
 Dennis Sam                         dsam@arista.com
@@ -234,7 +235,9 @@ Mark Maglana                       mmaglana@gmail.com
 Mark Michelson                     mmichels@redhat.com
 Markos Chandras                    mchandras@suse.de
 Martin Casado                      casado@cs.stanford.edu
+Martin Fong                        mwfong@csl.sri.com
 Martino Fornasa                    mf@fornasa.it
+Martin Xu                          martinxu9.ovs@gmail.com
 Maryam Tahhan                      maryam.tahhan@intel.com
 Matteo Croce                       mcroce@redhat.com
 Mauricio Vásquez                   mauricio.vasquezbernal@studenti.polito.it
@@ -306,6 +309,7 @@ Sanjay Sane
 Saurabh Mohan                      saurabh@cplanenetworks.com
 Saurabh Shah
 Saurabh Shrivastava                saurabh.shrivastava@nuagenetworks.net
+Scott Cheloha                      scottcheloha@gmail.com
 Scott Lowe                         scott.lowe@scottlowe.org
 Scott Mann                         sdmnix@gmail.com
 Selvamuthukumar                    smkumar@merunetworks.com
