@@ -1471,7 +1471,7 @@ build_ipam(struct hmap *datapaths, struct hmap *ports)
                 }
             }
 
-            if (!nbsp->n_addresses && nbsp->dynamic_addresses) {
+            if (!num_dynamic_addresses && nbsp->dynamic_addresses) {
                 nbrec_logical_switch_port_set_dynamic_addresses(nbsp, NULL);
             }
         }
@@ -1685,7 +1685,6 @@ join_logical_ports(struct northd_context *ctx,
                 }
 
                 op->od = od;
-                ipam_add_port_addresses(od, op);
                 tag_alloc_add_existing_tags(tag_alloc_table, nbsp);
             }
         } else {
@@ -1729,7 +1728,6 @@ join_logical_ports(struct northd_context *ctx,
 
                 op->lrp_networks = lrp_networks;
                 op->od = od;
-                ipam_add_port_addresses(op->od, op);
 
                 const char *redirect_chassis = smap_get(&op->nbrp->options,
                                                         "redirect-chassis");
@@ -1831,6 +1829,8 @@ join_logical_ports(struct northd_context *ctx,
                 }
             }
         }
+
+        ipam_add_port_addresses(op->od, op);
     }
 }
 
@@ -7384,6 +7384,7 @@ static struct gen_opts_map supported_dhcp_opts[] = {
     DHCP_OPT_T1,
     DHCP_OPT_T2,
     DHCP_OPT_WPAD,
+    DHCP_OPT_BOOTFILE,
 };
 
 static struct gen_opts_map supported_dhcpv6_opts[] = {
