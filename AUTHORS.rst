@@ -65,6 +65,7 @@ Ariel Tubaltsev                    atubaltsev@vmware.com
 Arnoldo Lutz                       arnoldo.lutz.guevara@hpe.com
 Arun Sharma                        arun.sharma@calsoftinc.com
 Aryan TaheriMonfared               aryan.taherimonfared@uis.no
+Asaf Penso                         asafp@mellanox.com
 Ashish Varma                       ashishvarma.ovs@gmail.com
 Ashwin Swaminathan                 ashwinds@arista.com
 Babu Shanmugam                     bschanmu@redhat.com
@@ -158,6 +159,7 @@ Helmut Schaa                       helmut.schaa@googlemail.com
 Hiteshi Kalra                      hiteshi.kalra@tcs.com
 Huanle Han                         hanxueluo@gmail.com
 Hui Kang                           kangh@us.ibm.com
+Hyong Youb Kim                     hyonkim@cisco.com
 Ian Campbell                       Ian.Campbell@citrix.com
 Ian Stokes                         ian.stokes@intel.com
 Ilya Maximets                      i.maximets@samsung.com
@@ -264,6 +266,7 @@ Niti Rohilla                       niti.rohilla@tcs.com
 Nitin Katiyar                      nitin.katiyar@ericsson.com
 Numan Siddique                     nusiddiq@redhat.com
 Ofer Ben-Yacov                     ofer.benyacov@gmail.com
+Ophir Munk                         ophirmu@mellanox.com
 Or Gerlitz                         ogerlitz@mellanox.com
 Ori Shoshan                        ori.shoshan@guardicore.com
 Padmanabhan Krishnan               kprad1@yahoo.com
