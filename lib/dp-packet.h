@@ -522,28 +522,28 @@ dp_packet_mbuf_init(struct dp_packet *p)
 }
 
 static inline bool
-dp_packet_ip_checksum_valid(struct dp_packet *p)
+dp_packet_ip_checksum_valid(const struct dp_packet *p)
 {
     return (p->mbuf.ol_flags & PKT_RX_IP_CKSUM_MASK) ==
             PKT_RX_IP_CKSUM_GOOD;
 }
 
 static inline bool
-dp_packet_ip_checksum_bad(struct dp_packet *p)
+dp_packet_ip_checksum_bad(const struct dp_packet *p)
 {
     return (p->mbuf.ol_flags & PKT_RX_IP_CKSUM_MASK) ==
             PKT_RX_IP_CKSUM_BAD;
 }
 
 static inline bool
-dp_packet_l4_checksum_valid(struct dp_packet *p)
+dp_packet_l4_checksum_valid(const struct dp_packet *p)
 {
     return (p->mbuf.ol_flags & PKT_RX_L4_CKSUM_MASK) ==
             PKT_RX_L4_CKSUM_GOOD;
 }
 
 static inline bool
-dp_packet_l4_checksum_bad(struct dp_packet *p)
+dp_packet_l4_checksum_bad(const struct dp_packet *p)
 {
     return (p->mbuf.ol_flags & PKT_RX_L4_CKSUM_MASK) ==
             PKT_RX_L4_CKSUM_BAD;
@@ -654,25 +654,25 @@ dp_packet_mbuf_init(struct dp_packet *p OVS_UNUSED)
 }
 
 static inline bool
-dp_packet_ip_checksum_valid(struct dp_packet *p OVS_UNUSED)
+dp_packet_ip_checksum_valid(const struct dp_packet *p OVS_UNUSED)
 {
     return false;
 }
 
 static inline bool
-dp_packet_ip_checksum_bad(struct dp_packet *p OVS_UNUSED)
+dp_packet_ip_checksum_bad(const struct dp_packet *p OVS_UNUSED)
 {
     return false;
 }
 
 static inline bool
-dp_packet_l4_checksum_valid(struct dp_packet *p OVS_UNUSED)
+dp_packet_l4_checksum_valid(const struct dp_packet *p OVS_UNUSED)
 {
     return false;
 }
 
 static inline bool
-dp_packet_l4_checksum_bad(struct dp_packet *p OVS_UNUSED)
+dp_packet_l4_checksum_bad(const struct dp_packet *p OVS_UNUSED)
 {
     return false;
 }
@@ -754,6 +754,7 @@ enum { NETDEV_MAX_BURST = 32 }; /* Maximum number packets in a batch. */
 struct dp_packet_batch {
     size_t count;
     bool trunc; /* true if the batch needs truncate. */
+    bool do_not_steal; /* Indicate that the packets should not be stolen. */
     struct dp_packet *packets[NETDEV_MAX_BURST];
 };
 
@@ -762,6 +763,7 @@ dp_packet_batch_init(struct dp_packet_batch *batch)
 {
     batch->count = 0;
     batch->trunc = false;
+    batch->do_not_steal = false;
 }
 
 static inline void
@@ -815,6 +817,12 @@ static inline bool
 dp_packet_batch_is_empty(const struct dp_packet_batch *batch)
 {
     return !dp_packet_batch_size(batch);
+}
+
+static inline bool
+dp_packet_batch_is_full(const struct dp_packet_batch *batch)
+{
+    return dp_packet_batch_size(batch) == NETDEV_MAX_BURST;
 }
 
 #define DP_PACKET_BATCH_FOR_EACH(IDX, PACKET, BATCH)                \
