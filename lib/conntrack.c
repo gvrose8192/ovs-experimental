@@ -686,10 +686,9 @@ reverse_nat_packet(struct dp_packet *pkt, const struct conn *conn)
                                  &conn->key.dst.addr.ipv6, true);
         }
         reverse_pat_packet(pkt, conn);
-        uint32_t icmp6_csum = packet_csum_pseudoheader6(nh6);
         icmp6->icmp6_base.icmp6_cksum = 0;
-        icmp6->icmp6_base.icmp6_cksum = csum_finish(
-            csum_continue(icmp6_csum, icmp6, tail - (char *) icmp6 - pad));
+        icmp6->icmp6_base.icmp6_cksum = packet_csum_upperlayer6(nh6, icmp6,
+            IPPROTO_ICMPV6, tail - (char *) icmp6 - pad);
     }
     pkt->l3_ofs = orig_l3_ofs;
     pkt->l4_ofs = orig_l4_ofs;
@@ -1591,19 +1590,14 @@ static inline bool
 checksum_valid(const struct conn_key *key, const void *data, size_t size,
                const void *l3)
 {
-    uint32_t csum = 0;
-
     if (key->dl_type == htons(ETH_TYPE_IP)) {
-        csum = packet_csum_pseudoheader(l3);
+        uint32_t csum = packet_csum_pseudoheader(l3);
+        return csum_finish(csum_continue(csum, data, size)) == 0;
     } else if (key->dl_type == htons(ETH_TYPE_IPV6)) {
-        csum = packet_csum_pseudoheader6(l3);
+        return packet_csum_upperlayer6(l3, data, key->nw_proto, size) == 0;
     } else {
         return false;
     }
-
-    csum = csum_continue(csum, data, size);
-
-    return csum_finish(csum) == 0;
 }
 
 static inline bool
@@ -2181,24 +2175,21 @@ nat_select_range_tuple(struct conntrack *ct, const struct conn *conn,
 
     uint16_t port = first_port;
     bool all_ports_tried = false;
-    /* For DNAT, we don't use ephemeral ports. */
-    bool ephemeral_ports_tried = conn->nat_info->nat_action & NAT_ACTION_DST
-                                 ? true : false;
+    /* For DNAT or for specified port ranges, we don't use ephemeral ports. */
+    bool ephemeral_ports_tried
+        = conn->nat_info->nat_action & NAT_ACTION_DST ||
+              conn->nat_info->nat_action & NAT_ACTION_SRC_PORT
+          ? true : false;
     union ct_addr first_addr = ct_addr;
+    bool pat_enabled = conn->key.nw_proto != IPPROTO_ICMP &&
+                       conn->key.nw_proto != IPPROTO_ICMPV6;
 
     while (true) {
         if (conn->nat_info->nat_action & NAT_ACTION_SRC) {
             nat_conn->rev_key.dst.addr = ct_addr;
-        } else {
-            nat_conn->rev_key.src.addr = ct_addr;
-        }
-
-        if ((conn->key.nw_proto == IPPROTO_ICMP) ||
-            (conn->key.nw_proto == IPPROTO_ICMPV6)) {
-            all_ports_tried = true;
-        } else if (conn->nat_info->nat_action & NAT_ACTION_SRC) {
             nat_conn->rev_key.dst.port = htons(port);
         } else {
+            nat_conn->rev_key.src.addr = ct_addr;
             nat_conn->rev_key.src.port = htons(port);
         }
 
@@ -2206,7 +2197,7 @@ nat_select_range_tuple(struct conntrack *ct, const struct conn *conn,
                                                ct->hash_basis);
         if (new_insert) {
             return true;
-        } else if (!all_ports_tried) {
+        } else if (pat_enabled && !all_ports_tried) {
             if (min_port == max_port) {
                 all_ports_tried = true;
             } else if (port == max_port) {
@@ -2228,7 +2219,7 @@ nat_select_range_tuple(struct conntrack *ct, const struct conn *conn,
                 ct_addr = conn->nat_info->min_addr;
             }
             if (!memcmp(&ct_addr, &first_addr, sizeof ct_addr)) {
-                if (!ephemeral_ports_tried) {
+                if (pat_enabled && !ephemeral_ports_tried) {
                     ephemeral_ports_tried = true;
                     ct_addr = conn->nat_info->min_addr;
                     first_addr = ct_addr;
@@ -3261,16 +3252,14 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
     }
 
     th->tcp_csum = 0;
-    uint32_t tcp_csum;
     if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {
-        tcp_csum = packet_csum_pseudoheader6(nh6);
+        th->tcp_csum = packet_csum_upperlayer6(nh6, th, ctx->key.nw_proto,
+                           dp_packet_l4_size(pkt));
     } else {
-        tcp_csum = packet_csum_pseudoheader(l3_hdr);
+        uint32_t tcp_csum = packet_csum_pseudoheader(l3_hdr);
+        th->tcp_csum = csum_finish(
+             csum_continue(tcp_csum, th, dp_packet_l4_size(pkt)));
     }
-    const char *tail = dp_packet_tail(pkt);
-    uint8_t pad = dp_packet_l2_pad_size(pkt);
-    th->tcp_csum = csum_finish(
-        csum_continue(tcp_csum, th, tail - (char *) th - pad));
 
     if (seq_skew) {
         conn_seq_skew_set(ct, &ec->key, now, seq_skew + ec->seq_skew,

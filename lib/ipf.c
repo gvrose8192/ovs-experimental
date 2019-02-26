@@ -407,6 +407,7 @@ ipf_reassemble_v4_frags(struct ipf_list *ipf_list)
 {
     struct ipf_frag *frag_list = ipf_list->frag_list;
     struct dp_packet *pkt = dp_packet_clone(frag_list[0].pkt);
+    dp_packet_set_size(pkt, dp_packet_size(pkt) - dp_packet_l2_pad_size(pkt));
     struct ip_header *l3 = dp_packet_l3(pkt);
     int len = ntohs(l3->ip_tot_len);
 
@@ -420,15 +421,16 @@ ipf_reassemble_v4_frags(struct ipf_list *ipf_list)
         return NULL;
     }
 
-    dp_packet_prealloc_tailroom(pkt, len + rest_len);
+    dp_packet_prealloc_tailroom(pkt, rest_len);
 
     for (int i = 1; i <= ipf_list->last_inuse_idx; i++) {
         size_t add_len = frag_list[i].end_data_byte -
                          frag_list[i].start_data_byte + 1;
-        len += add_len;
         const char *l4 = dp_packet_l4(frag_list[i].pkt);
         dp_packet_put(pkt, l4, add_len);
     }
+
+    len += rest_len;
     l3 = dp_packet_l3(pkt);
     ovs_be16 new_ip_frag_off = l3->ip_frag_off & ~htons(IP_MORE_FRAGMENTS);
     l3->ip_csum = recalc_csum16(l3->ip_csum, l3->ip_frag_off,
@@ -450,29 +452,30 @@ ipf_reassemble_v6_frags(struct ipf_list *ipf_list)
 {
     struct ipf_frag *frag_list = ipf_list->frag_list;
     struct dp_packet *pkt = dp_packet_clone(frag_list[0].pkt);
+    dp_packet_set_size(pkt, dp_packet_size(pkt) - dp_packet_l2_pad_size(pkt));
     struct  ovs_16aligned_ip6_hdr *l3 = dp_packet_l3(pkt);
     int pl = ntohs(l3->ip6_plen) - sizeof(struct ovs_16aligned_ip6_frag);
 
     int rest_len = frag_list[ipf_list->last_inuse_idx].end_data_byte -
                    frag_list[1].start_data_byte + 1;
 
-    if (pl + rest_len > IPV4_PACKET_MAX_SIZE) {
+    if (pl + rest_len > IPV6_PACKET_MAX_DATA) {
         ipf_print_reass_packet(
              "Unsupported big reassembled v6 packet; v6 hdr:", l3);
         dp_packet_delete(pkt);
         return NULL;
     }
 
-    dp_packet_prealloc_tailroom(pkt, pl + rest_len);
+    dp_packet_prealloc_tailroom(pkt, rest_len);
 
     for (int i = 1; i <= ipf_list->last_inuse_idx; i++) {
         size_t add_len = frag_list[i].end_data_byte -
                           frag_list[i].start_data_byte + 1;
-        pl += add_len;
         const char *l4 = dp_packet_l4(frag_list[i].pkt);
         dp_packet_put(pkt, l4, add_len);
     }
 
+    pl += rest_len;
     l3 = dp_packet_l3(pkt);
 
     uint8_t nw_proto = l3->ip6_nxt;
@@ -519,9 +522,7 @@ ipf_list_state_transition(struct ipf *ipf, struct ipf_list *ipf_list,
         }
         break;
     case IPF_LIST_STATE_FIRST_SEEN:
-        if (ff) {
-            next_state = IPF_LIST_STATE_FIRST_SEEN;
-        } else if (lf) {
+        if (lf) {
             next_state = IPF_LIST_STATE_FIRST_LAST_SEEN;
         } else {
             next_state = IPF_LIST_STATE_FIRST_SEEN;
@@ -530,8 +531,6 @@ ipf_list_state_transition(struct ipf *ipf, struct ipf_list *ipf_list,
     case IPF_LIST_STATE_LAST_SEEN:
         if (ff) {
             next_state = IPF_LIST_STATE_FIRST_LAST_SEEN;
-        } else if (lf) {
-            next_state = IPF_LIST_STATE_LAST_SEEN;
         } else {
             next_state = IPF_LIST_STATE_LAST_SEEN;
         }
@@ -614,7 +613,7 @@ ipf_is_valid_v4_frag(struct ipf *ipf, struct dp_packet *pkt)
     uint32_t min_v4_frag_size_;
     atomic_read_relaxed(&ipf->min_v4_frag_size, &min_v4_frag_size_);
     bool lf = ipf_is_last_v4_frag(pkt);
-    if (OVS_UNLIKELY(!lf && dp_packet_size(pkt) < min_v4_frag_size_)) {
+    if (OVS_UNLIKELY(!lf && dp_packet_l3_size(pkt) < min_v4_frag_size_)) {
         ipf_count(ipf, false, IPF_NFRAGS_TOO_SMALL);
         goto invalid_pkt;
     }
@@ -694,7 +693,7 @@ ipf_is_valid_v6_frag(struct ipf *ipf, struct dp_packet *pkt)
     atomic_read_relaxed(&ipf->min_v6_frag_size, &min_v6_frag_size_);
     bool lf = ipf_is_last_v6_frag(ip6f_offlg);
 
-    if (OVS_UNLIKELY(!lf && dp_packet_size(pkt) < min_v6_frag_size_)) {
+    if (OVS_UNLIKELY(!lf && dp_packet_l3_size(pkt) < min_v6_frag_size_)) {
         ipf_count(ipf, true, IPF_NFRAGS_TOO_SMALL);
         goto invalid_pkt;
     }
@@ -713,16 +712,10 @@ ipf_v6_key_extract(struct dp_packet *pkt, ovs_be16 dl_type, uint16_t zone,
                    uint16_t *end_data_byte, bool *ff, bool *lf)
 {
     const struct ovs_16aligned_ip6_hdr *l3 = dp_packet_l3(pkt);
-    const char *l4 = dp_packet_l4(pkt);
-    const char *tail = dp_packet_tail(pkt);
-    uint8_t pad = dp_packet_l2_pad_size(pkt);
-    size_t l3_size = tail - (char *)l3 - pad;
-    size_t l4_size = tail - (char *)l4 - pad;
-    size_t l3_hdr_size = sizeof *l3;
     uint8_t nw_frag = 0;
     uint8_t nw_proto = l3->ip6_nxt;
     const void *data = l3 + 1;
-    size_t datasize = l3_size - l3_hdr_size;
+    size_t datasize = dp_packet_l3_size(pkt) - sizeof *l3;
     const struct ovs_16aligned_ip6_frag *frag_hdr = NULL;
 
     parse_ipv6_ext_hdrs(&data, &datasize, &nw_proto, &nw_frag, &frag_hdr);
@@ -730,7 +723,7 @@ ipf_v6_key_extract(struct dp_packet *pkt, ovs_be16 dl_type, uint16_t zone,
     ovs_be16 ip6f_offlg = frag_hdr->ip6f_offlg;
     *start_data_byte = ntohs(ip6f_offlg & IP6F_OFF_MASK) +
         sizeof (struct ovs_16aligned_ip6_frag);
-    *end_data_byte = *start_data_byte + l4_size - 1;
+    *end_data_byte = *start_data_byte + dp_packet_l4_size(pkt) - 1;
     *ff = ipf_is_first_v6_frag(ip6f_offlg);
     *lf = ipf_is_last_v6_frag(ip6f_offlg);
     memset(key, 0, sizeof *key);
@@ -765,7 +758,7 @@ ipf_list_key_eq(const struct ipf_list_key *key1,
 static struct ipf_list *
 ipf_list_key_lookup(struct ipf *ipf, const struct ipf_list_key *key,
                     uint32_t hash)
-    /* OVS_REQUIRES(ipf->ipf_lock) */
+    OVS_REQUIRES(ipf->ipf_lock)
 {
     struct ipf_list *ipf_list;
     HMAP_FOR_EACH_WITH_HASH (ipf_list, node, hash, &ipf->frag_lists) {
@@ -1174,12 +1167,9 @@ ipf_post_execute_reass_pkts(struct ipf *ipf,
                 }
 
                 const struct ipf_frag *frag_0 = &rp->list->frag_list[0];
-                const char *tail_frag = dp_packet_tail(frag_0->pkt);
-                uint8_t pad_frag = dp_packet_l2_pad_size(frag_0->pkt);
                 void *l4_frag = dp_packet_l4(frag_0->pkt);
                 void *l4_reass = dp_packet_l4(pkt);
-                memcpy(l4_frag, l4_reass,
-                       tail_frag - (char *) l4_frag - pad_frag);
+                memcpy(l4_frag, l4_reass, dp_packet_l4_size(frag_0->pkt));
 
                 if (v6) {
                     struct ovs_16aligned_ip6_hdr *l3_frag
