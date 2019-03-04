@@ -622,12 +622,13 @@ pinctrl_handle_put_dhcp_opts(
     in_dhcp_ptr += sizeof *in_dhcp_data;
     if (in_dhcp_ptr > end) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&rl, "Invalid or incomplete DHCP packet received");
+        VLOG_WARN_RL(&rl, "Invalid or incomplete DHCP packet received, "
+                     "bad data length");
         goto exit;
     }
     if (in_dhcp_data->op != DHCP_OP_REQUEST) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&rl, "Invalid opcode in the DHCP packet : %d",
+        VLOG_WARN_RL(&rl, "Invalid opcode in the DHCP packet: %d",
                      in_dhcp_data->op);
         goto exit;
     }
@@ -692,7 +693,7 @@ pinctrl_handle_put_dhcp_opts(
     if (*in_dhcp_msg_type != DHCP_MSG_DISCOVER &&
         *in_dhcp_msg_type != DHCP_MSG_REQUEST) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&rl, "Invalid DHCP message type : %d", *in_dhcp_msg_type);
+        VLOG_WARN_RL(&rl, "Invalid DHCP message type: %d", *in_dhcp_msg_type);
         goto exit;
     }
 
@@ -1024,13 +1025,13 @@ pinctrl_handle_put_dhcpv6_opts(
 
     if (!in_opt_client_id) {
         VLOG_WARN_RL(&rl, "DHCPv6 option - Client id not present in the "
-                     " DHCPv6 packet");
+                     "DHCPv6 packet");
         goto exit;
     }
 
     if (!iaid && in_dhcpv6_msg_type != DHCPV6_MSG_TYPE_INFO_REQ) {
         VLOG_WARN_RL(&rl, "DHCPv6 option - IA NA not present in the "
-                     " DHCPv6 packet");
+                     "DHCPv6 packet");
         goto exit;
     }
 
@@ -1822,6 +1823,11 @@ send_ipv6_ras(struct ovsdb_idl_index *sbrec_port_binding_by_datapath,
                     ra->config->max_interval);
                 shash_add(&ipv6_ras, pb->logical_port, ra);
             } else {
+                if (config->min_interval != ra->config->min_interval ||
+                    config->max_interval != ra->config->max_interval)
+                    ra->next_announce = ipv6_ra_calc_next_announce(
+                        config->min_interval,
+                        config->max_interval);
                 ipv6_ra_config_delete(ra->config);
                 ra->config = config;
             }
@@ -2391,8 +2397,8 @@ extract_addresses_with_port(const char *addresses,
     if (lexer.token.type != LEX_T_STRING) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         VLOG_INFO_RL(&rl,
-                    "Syntax error: expecting quoted string after"
-                    " 'is_chassis_resident' in address '%s'", addresses);
+                    "Syntax error: expecting quoted string after "
+                    "'is_chassis_resident' in address '%s'", addresses);
         lexer_destroy(&lexer);
         return false;
     }

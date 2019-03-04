@@ -39,6 +39,8 @@ enum ovsdb_monitor_version {
       OVSDB_MONITOR_V1,         /* RFC 7047 "monitor" method. */
       OVSDB_MONITOR_V2,         /* Extension to RFC 7047, see ovsdb-server
                                    man page for details. */
+      OVSDB_MONITOR_V3,         /* Extension to V2, see ovsdb-server man
+                                   page for details. */
 
       /* Last entry.  */
       OVSDB_MONITOR_VERSION_MAX
@@ -56,9 +58,10 @@ struct ovsdb_monitor *ovsdb_monitor_add(struct ovsdb_monitor *);
 void ovsdb_monitor_add_jsonrpc_monitor(struct ovsdb_monitor *,
                        struct ovsdb_jsonrpc_monitor *);
 
+struct ovsdb_monitor_change_set;
 void ovsdb_monitor_remove_jsonrpc_monitor(struct ovsdb_monitor *,
                                struct ovsdb_jsonrpc_monitor *,
-                               uint64_t unflushed);
+                               struct ovsdb_monitor_change_set *);
 
 void ovsdb_monitor_add_table(struct ovsdb_monitor *,
                              const struct ovsdb_table *);
@@ -77,16 +80,21 @@ struct json *ovsdb_monitor_get_update(struct ovsdb_monitor *,
                                       bool cond_updated,
                                       struct ovsdb_monitor_session_condition *,
                                       enum ovsdb_monitor_version,
-                                      uint64_t *unflushed_transaction);
+                                      struct ovsdb_monitor_change_set **p_mcs);
+
+const struct uuid *ovsdb_monitor_get_last_txnid(struct ovsdb_monitor *);
 
 void ovsdb_monitor_table_add_select(struct ovsdb_monitor *,
                                     const struct ovsdb_table *,
                                     enum ovsdb_monitor_selection);
 
 bool ovsdb_monitor_needs_flush(struct ovsdb_monitor *,
-                               uint64_t next_transaction);
+                               struct ovsdb_monitor_change_set *);
 
-void ovsdb_monitor_get_initial(const struct ovsdb_monitor *);
+void ovsdb_monitor_get_initial(struct ovsdb_monitor *,
+                               struct ovsdb_monitor_change_set **);
+void ovsdb_monitor_get_changes_after(const struct uuid *txn_uuid,
+        struct ovsdb_monitor *, struct ovsdb_monitor_change_set **);
 
 void ovsdb_monitor_get_memory_usage(struct simap *);
 
