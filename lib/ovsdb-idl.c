@@ -571,6 +571,7 @@ ovsdb_idl_destroy(struct ovsdb_idl *idl)
         ovsdb_idl_db_destroy(&idl->server);
         ovsdb_idl_db_destroy(&idl->data);
         json_destroy(idl->request_id);
+        free(idl->remote);
         free(idl);
     }
 }
@@ -616,6 +617,7 @@ ovsdb_idl_db_clear(struct ovsdb_idl_db *db)
             ovsdb_idl_row_destroy(row);
         }
     }
+    ovsdb_idl_row_destroy_postprocess(db);
 
     db->cond_changed = false;
     db->cond_seqno = 0;

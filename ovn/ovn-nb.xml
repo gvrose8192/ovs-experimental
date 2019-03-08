@@ -2170,6 +2170,23 @@
             to identify a bootfile.
           </p>
         </column>
+
+        <column name="options" key="path_prefix">
+          <p>
+            The DHCPv4 option code for this option is 210. In PXELINUX'
+            case this option is used to set a common path prefix,
+            instead of deriving it from the bootfile name.
+          </p>
+        </column>
+
+        <column name="options" key="tftp_server_address">
+          <p>
+            The DHCPv4 option code for this option is 150. The option
+            contains one or more IPv4 addresses that the client MAY
+            use. This option is Cisco proprietary, the IEEE standard
+            that matches with this requirement is option 66 (tftp_server).
+          </p>
+        </column>
       </group>
     </group>
 
