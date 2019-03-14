@@ -39,7 +39,6 @@
 #include "fatal-signal.h"
 #include "hash.h"
 #include "openvswitch/list.h"
-#include "netdev-dpdk.h"
 #include "netdev-provider.h"
 #include "netdev-vport.h"
 #include "odp-netlink.h"
@@ -814,10 +813,10 @@ netdev_pop_header(struct netdev *netdev, struct dp_packet_batch *batch)
     DP_PACKET_BATCH_REFILL_FOR_EACH (i, size, packet, batch) {
         packet = netdev->netdev_class->pop_header(packet);
         if (packet) {
-            /* Reset the checksum offload flags if present, to avoid wrong
+            /* Reset the offload flags if present, to avoid wrong
              * interpretation in the further packet processing when
              * recirculated.*/
-            reset_dp_packet_checksum_ol_flags(packet);
+            dp_packet_reset_offload(packet);
             dp_packet_batch_refill(batch, packet, i);
         }
     }
