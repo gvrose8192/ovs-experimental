@@ -308,6 +308,7 @@ Rohith Basavaraja                  rohith.basavaraja@gmail.com
 Roi Dayan                          roid@mellanox.com
 Róbert Mulik                       robert.mulik@ericsson.com
 Romain Lenglet                     romain.lenglet@berabera.info
+Roni Bar Yanai                     roniba@mellanox.com
 Russell Bryant                     russell@ovn.org
 RYAN D. MOATS                      rmoats@us.ibm.com
 Ryan Wilson
@@ -326,6 +327,7 @@ Selvamuthukumar                    smkumar@merunetworks.com
 Sha Zhang                          zhangsha.zhang@huawei.com
 Shad Ansari                        shad.ansari@hpe.com
 Shan Wei                           davidshan@tencent.com
+Sharon Krendel                     thekafkaf@gmail.com
 Shashank Ram                       rams@vmware.com
 Shashwat Srivastava                shashwat.srivastava@tcs.com
 Shih-Hao Li                        shihli@vmware.com
