@@ -2627,6 +2627,17 @@ ofproto_port_get_stats(const struct ofport *port, struct netdev_stats *stats)
     return error;
 }
 
+int
+ofproto_vport_get_status(const struct ofproto *ofproto, ofp_port_t ofp_port,
+                         char **errp)
+{
+    struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
+
+    return (ofport && ofproto->ofproto_class->vport_get_status)
+           ? ofproto->ofproto_class->vport_get_status(ofport, errp)
+           : EOPNOTSUPP;
+}
+
 static int
 update_port(struct ofproto *ofproto, const char *name)
 {
@@ -7425,6 +7436,8 @@ modify_group_start(struct ofproto *ofproto, struct ofproto_group_mod *ogm)
     *CONST_CAST(long long int *, &(new_group->created)) = old_group->created;
     *CONST_CAST(long long int *, &(new_group->modified)) = time_msec();
 
+    *CONST_CAST(uint32_t *, &(new_group->n_buckets)) =
+        ovs_list_size(&(new_group->buckets));
     group_collection_add(&ogm->old_groups, old_group);
 
     /* Mark the old group for deletion. */
