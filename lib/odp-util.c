@@ -5819,6 +5819,11 @@ static void
 odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
                          bool export_mask, struct ofpbuf *buf)
 {
+    /* New "struct flow" fields that are visible to the datapath (including all
+     * data fields) should be translated into equivalent datapath flow fields
+     * here (you will have to add a OVS_KEY_ATTR_* for them). */
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+
     struct ovs_key_ethernet *eth_key;
     size_t encap[FLOW_MAX_VLAN_HEADERS] = {0};
     size_t max_vlans;
@@ -6900,6 +6905,11 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
                        struct flow *flow, const struct flow *src_flow,
                        char **errorp)
 {
+    /* New "struct flow" fields that are visible to the datapath (including all
+     * data fields) should be translated from equivalent datapath flow fields
+     * here (you will have to add a OVS_KEY_ATTR_* for them).  */
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+
     enum odp_key_fitness fitness = ODP_FIT_ERROR;
     if (errorp) {
         *errorp = NULL;
@@ -8230,14 +8240,25 @@ commit_encap_decap_action(const struct flow *flow,
  * in addition to this function if needed.  Sets fields in 'wc' that are
  * used as part of the action.
  *
- * Returns a reason to force processing the flow's packets into the userspace
- * slow path, if there is one, otherwise 0. */
+ * In the common case, this function returns 0.  If the flow key modification
+ * requires the flow's packets to be forced into the userspace slow path, this
+ * function returns SLOW_ACTION.  This only happens when there is no ODP action
+ * to modify some field that was actually modified.  For example, there is no
+ * ODP action to modify any ARP field, so such a modification triggers
+ * SLOW_ACTION.  (When this happens, packets that need such modification get
+ * flushed to userspace and handled there, which works OK but much more slowly
+ * than if the datapath handled it directly.) */
 enum slow_path_reason
 commit_odp_actions(const struct flow *flow, struct flow *base,
                    struct ofpbuf *odp_actions, struct flow_wildcards *wc,
                    bool use_masked, bool pending_encap, bool pending_decap,
                    struct ofpbuf *encap_data)
 {
+    /* If you add a field that OpenFlow actions can change, and that is visible
+     * to the datapath (including all data fields), then you should also add
+     * code here to commit changes to the field. */
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+
     enum slow_path_reason slow1, slow2;
     bool mpls_done = false;
 

@@ -145,6 +145,7 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
      * ports that have a Gateway_Chassis that point's to our own
      * chassis */
     sbrec_port_binding_add_clause_type(&pb, OVSDB_F_EQ, "chassisredirect");
+    sbrec_port_binding_add_clause_type(&pb, OVSDB_F_EQ, "external");
     if (chassis) {
         /* This should be mostly redundant with the other clauses for port
          * bindings, but it allows us to catch any ports that are assigned to
@@ -710,7 +711,7 @@ main(int argc, char *argv[])
                     bfd_calculate_active_tunnels(br_int, &active_tunnels);
                 }
 
-                binding_run(ovnsb_idl_txn, ovs_idl_txn, sbrec_chassis_by_name,
+                binding_run(ovnsb_idl_txn, ovs_idl_txn,
                             sbrec_datapath_binding_by_key,
                             sbrec_port_binding_by_datapath,
                             sbrec_port_binding_by_name,
@@ -721,38 +722,40 @@ main(int argc, char *argv[])
                             &active_tunnels, &local_datapaths,
                             &local_lports, &local_lport_ids);
             }
-            if (br_int && chassis) {
-                struct shash addr_sets = SHASH_INITIALIZER(&addr_sets);
-                addr_sets_init(sbrec_address_set_table_get(ovnsb_idl_loop.idl),
-                               &addr_sets);
-                struct shash port_groups = SHASH_INITIALIZER(&port_groups);
-                port_groups_init(
-                    sbrec_port_group_table_get(ovnsb_idl_loop.idl),
-                    &port_groups);
 
-                patch_run(ovs_idl_txn,
-                          ovsrec_bridge_table_get(ovs_idl_loop.idl),
-                          ovsrec_open_vswitch_table_get(ovs_idl_loop.idl),
-                          ovsrec_port_table_get(ovs_idl_loop.idl),
-                          sbrec_port_binding_table_get(ovnsb_idl_loop.idl),
-                          br_int, chassis);
-
+            if (br_int) {
                 enum mf_field_id mff_ovn_geneve = ofctrl_run(
                     br_int, &pending_ct_zones);
 
-                pinctrl_run(ovnsb_idl_txn, sbrec_chassis_by_name,
-                            sbrec_datapath_binding_by_key,
-                            sbrec_port_binding_by_datapath,
-                            sbrec_port_binding_by_key,
-                            sbrec_port_binding_by_name,
-                            sbrec_mac_binding_by_lport_ip,
-                            sbrec_dns_table_get(ovnsb_idl_loop.idl),
-                            br_int, chassis,
-                            &local_datapaths, &active_tunnels);
-                update_ct_zones(&local_lports, &local_datapaths, &ct_zones,
-                                ct_zone_bitmap, &pending_ct_zones);
-                if (ovs_idl_txn) {
-                    if (ofctrl_can_put()) {
+                if (chassis) {
+                    struct shash addr_sets = SHASH_INITIALIZER(&addr_sets);
+                    addr_sets_init(
+                        sbrec_address_set_table_get(ovnsb_idl_loop.idl),
+                        &addr_sets);
+                    struct shash port_groups = SHASH_INITIALIZER(&port_groups);
+                    port_groups_init(
+                        sbrec_port_group_table_get(ovnsb_idl_loop.idl),
+                        &port_groups);
+
+                    patch_run(ovs_idl_txn,
+                              ovsrec_bridge_table_get(ovs_idl_loop.idl),
+                              ovsrec_open_vswitch_table_get(ovs_idl_loop.idl),
+                              ovsrec_port_table_get(ovs_idl_loop.idl),
+                              sbrec_port_binding_table_get(ovnsb_idl_loop.idl),
+                              br_int, chassis);
+
+                    pinctrl_run(ovnsb_idl_txn,
+                                sbrec_datapath_binding_by_key,
+                                sbrec_port_binding_by_datapath,
+                                sbrec_port_binding_by_key,
+                                sbrec_port_binding_by_name,
+                                sbrec_mac_binding_by_lport_ip,
+                                sbrec_dns_table_get(ovnsb_idl_loop.idl),
+                                br_int, chassis,
+                                &local_datapaths, &active_tunnels);
+                    update_ct_zones(&local_lports, &local_datapaths, &ct_zones,
+                                    ct_zone_bitmap, &pending_ct_zones);
+                    if (ovs_idl_txn && ofctrl_can_put()) {
                         stopwatch_start(CONTROLLER_LOOP_STOPWATCH_NAME,
                                         time_msec());
 
@@ -760,7 +763,6 @@ main(int argc, char *argv[])
 
                         struct hmap flow_table = HMAP_INITIALIZER(&flow_table);
                         lflow_run(
-                            sbrec_chassis_by_name,
                             sbrec_multicast_group_by_name_datapath,
                             sbrec_port_binding_by_name,
                             sbrec_dhcp_options_table_get(ovnsb_idl_loop.idl),
@@ -774,15 +776,13 @@ main(int argc, char *argv[])
 
                         if (chassis_id) {
                             bfd_run(
-                                sbrec_chassis_by_name,
-                                sbrec_port_binding_by_datapath,
                                 ovsrec_interface_table_get(ovs_idl_loop.idl),
                                 br_int, chassis,
-                                sbrec_sb_global_table_get(ovnsb_idl_loop.idl),
-                                &local_datapaths);
+                                sbrec_ha_chassis_group_table_get(
+                                    ovnsb_idl_loop.idl),
+                                sbrec_sb_global_table_get(ovnsb_idl_loop.idl));
                         }
                         physical_run(
-                            sbrec_chassis_by_name,
                             sbrec_port_binding_by_name,
                             sbrec_multicast_group_table_get(
                                 ovnsb_idl_loop.idl),
@@ -809,28 +809,31 @@ main(int argc, char *argv[])
                             sbrec_chassis_set_nb_cfg(chassis, cur_cfg);
                         }
                     }
-                }
 
-                if (pending_pkt.conn) {
-                    char *error = ofctrl_inject_pkt(br_int, pending_pkt.flow_s,
-                                                    &addr_sets, &port_groups);
-                    if (error) {
-                        unixctl_command_reply_error(pending_pkt.conn, error);
-                        free(error);
-                    } else {
-                        unixctl_command_reply(pending_pkt.conn, NULL);
+                    if (pending_pkt.conn) {
+                        char *error = ofctrl_inject_pkt(br_int,
+                                                        pending_pkt.flow_s,
+                                                        &addr_sets,
+                                                        &port_groups);
+                        if (error) {
+                            unixctl_command_reply_error(pending_pkt.conn,
+                                                        error);
+                            free(error);
+                        } else {
+                            unixctl_command_reply(pending_pkt.conn, NULL);
+                        }
+                        pending_pkt.conn = NULL;
+                        free(pending_pkt.flow_s);
                     }
-                    pending_pkt.conn = NULL;
-                    free(pending_pkt.flow_s);
+
+                    update_sb_monitors(ovnsb_idl_loop.idl, chassis,
+                                       &local_lports, &local_datapaths);
+
+                    expr_const_sets_destroy(&addr_sets);
+                    shash_destroy(&addr_sets);
+                    expr_const_sets_destroy(&port_groups);
+                    shash_destroy(&port_groups);
                 }
-
-                update_sb_monitors(ovnsb_idl_loop.idl, chassis,
-                                   &local_lports, &local_datapaths);
-
-                expr_const_sets_destroy(&addr_sets);
-                shash_destroy(&addr_sets);
-                expr_const_sets_destroy(&port_groups);
-                shash_destroy(&port_groups);
             }
 
             /* If we haven't handled the pending packet insertion

@@ -23,8 +23,19 @@ Post-v2.11.0
        See section 4.1.15 of ovsdb-server(7) for details of related OVSDB
        protocol extension.
    - OVN:
-     * Select IPAM mac_prefix in a random manner if not provided by the user
+     * IPAM/MACAM:
+       - select IPAM mac_prefix in a random manner if not provided by the user
+       - add the capability to specify a static IPv4 and/or IPv6 address and
+         get the L2 one allocated dynamically using the following syntax:
+           ovn-nbctl lsp-set-addresses <port> "dynamic <IPv4 addr> <IPv6 addr>"
+     * Added the HA chassis group support.
+     * Added 'external' logical port support.
+     * Added Policy-based routing(PBR) support to create permit/deny/reroute
+       policies on the logical router. New table(Logical_Router_Policy) added in
+       OVN-NB schema. New "ovn-nbctl" commands to add/delete/list PBR policies.
    - New QoS type "linux-netem" on Linux.
+   - Added support for TLS Server Name Indication (SNI).
+
 
 v2.11.0 - 19 Feb 2019
 ---------------------
