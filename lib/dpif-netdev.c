@@ -5549,7 +5549,7 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
     memset(exceeded_rate, 0, cnt * sizeof *exceeded_rate);
 
     /* All packets will hit the meter at the same time. */
-    long_delta_t = (now - meter->used) / 1000; /* msec */
+    long_delta_t = now / 1000 - meter->used / 1000; /* msec */
 
     /* Make sure delta_t will not be too large, so that bucket will not
      * wrap around below. */
@@ -6438,20 +6438,13 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
 
         miniflow_extract(packet, &key->mf);
         key->len = 0; /* Not computed yet. */
-        /* If EMC and SMC disabled skip hash computation */
-        if (smc_enable_db == true || cur_min != 0) {
-            if (!md_is_valid) {
-                key->hash = dpif_netdev_packet_get_rss_hash_orig_pkt(packet,
-                        &key->mf);
-            } else {
-                key->hash = dpif_netdev_packet_get_rss_hash(packet, &key->mf);
-            }
-        }
-        if (cur_min) {
-            flow = emc_lookup(&cache->emc_cache, key);
-        } else {
-            flow = NULL;
-        }
+        key->hash =
+                (md_is_valid == false)
+                ? dpif_netdev_packet_get_rss_hash_orig_pkt(packet, &key->mf)
+                : dpif_netdev_packet_get_rss_hash(packet, &key->mf);
+
+        /* If EMC is disabled skip emc_lookup */
+        flow = (cur_min != 0) ? emc_lookup(&cache->emc_cache, key) : NULL;
         if (OVS_LIKELY(flow)) {
             tcp_flags = miniflow_get_tcp_flags(&key->mf);
             n_emc_hit++;
@@ -6556,8 +6549,7 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
          * could have already been installed since we last did the flow
          * lookup before upcall.  This could be solved by moving the
          * mutex lock outside the loop, but that's an awful long time
-         * to be locking everyone out of making flow installs.  If we
-         * move to a per-core classifier, it would be reasonable. */
+         * to be locking revalidators out of making flow modifications. */
         ovs_mutex_lock(&pmd->flow_mutex);
         netdev_flow = dp_netdev_pmd_lookup_flow(pmd, key, NULL);
         if (OVS_LIKELY(!netdev_flow)) {
@@ -7249,6 +7241,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
     case OVS_ACTION_ATTR_PUSH_NSH:
     case OVS_ACTION_ATTR_POP_NSH:
     case OVS_ACTION_ATTR_CT_CLEAR:
+    case OVS_ACTION_ATTR_CHECK_PKT_LEN:
     case __OVS_ACTION_ATTR_MAX:
         OVS_NOT_REACHED();
     }

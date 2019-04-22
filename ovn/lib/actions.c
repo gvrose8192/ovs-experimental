@@ -23,7 +23,6 @@
 #include "ovn-l7.h"
 #include "hash.h"
 #include "lib/packets.h"
-#include "logical-fields.h"
 #include "nx-match.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/hmap.h"
@@ -367,7 +366,13 @@ static void
 parse_LOAD(struct action_context *ctx, const struct expr_field *lhs)
 {
     size_t ofs = ctx->ovnacts->size;
-    struct ovnact_load *load = ovnact_put_LOAD(ctx->ovnacts);
+    struct ovnact_load *load;
+    if (lhs->symbol->ovn_field) {
+        load = ovnact_put_OVNFIELD_LOAD(ctx->ovnacts);
+    } else {
+        load = ovnact_put_LOAD(ctx->ovnacts);
+    }
+
     load->dst = *lhs;
 
     char *error = expr_type_check(lhs, lhs->n_bits, true);
@@ -1149,6 +1154,12 @@ parse_ICMP4(struct action_context *ctx)
 }
 
 static void
+parse_ICMP4_ERROR(struct action_context *ctx)
+{
+    parse_nested_action(ctx, OVNACT_ICMP4_ERROR, "ip4");
+}
+
+static void
 parse_ICMP6(struct action_context *ctx)
 {
     parse_nested_action(ctx, OVNACT_ICMP6, "ip6");
@@ -1203,6 +1214,12 @@ static void
 format_ICMP4(const struct ovnact_nest *nest, struct ds *s)
 {
     format_nested_action(nest, "icmp4", s);
+}
+
+static void
+format_ICMP4_ERROR(const struct ovnact_nest *nest, struct ds *s)
+{
+    format_nested_action(nest, "icmp4_error", s);
 }
 
 static void
@@ -1280,6 +1297,14 @@ encode_ICMP4(const struct ovnact_nest *on,
              struct ofpbuf *ofpacts)
 {
     encode_nested_actions(on, ep, ACTION_OPCODE_ICMP, ofpacts);
+}
+
+static void
+encode_ICMP4_ERROR(const struct ovnact_nest *on,
+                   const struct ovnact_encode_params *ep,
+                   struct ofpbuf *ofpacts)
+{
+    encode_nested_actions(on, ep, ACTION_OPCODE_ICMP4_ERROR, ofpacts);
 }
 
 static void
@@ -2297,6 +2322,92 @@ ovnact_set_meter_free(struct ovnact_set_meter *ct OVS_UNUSED)
 {
 }
 
+static void
+format_OVNFIELD_LOAD(const struct ovnact_load *load , struct ds *s)
+{
+    const struct ovn_field *f = ovn_field_from_name(load->dst.symbol->name);
+    switch (f->id) {
+    case OVN_ICMP4_FRAG_MTU:
+        ds_put_format(s, "%s = %u;", f->name,
+                      ntohs(load->imm.value.be16_int));
+        break;
+
+    case OVN_FIELD_N_IDS:
+    default:
+        OVS_NOT_REACHED();
+    }
+}
+
+static void
+encode_OVNFIELD_LOAD(const struct ovnact_load *load,
+            const struct ovnact_encode_params *ep OVS_UNUSED,
+            struct ofpbuf *ofpacts)
+{
+    const struct ovn_field *f = ovn_field_from_name(load->dst.symbol->name);
+    switch (f->id) {
+    case OVN_ICMP4_FRAG_MTU: {
+        size_t oc_offset = encode_start_controller_op(
+            ACTION_OPCODE_PUT_ICMP4_FRAG_MTU, true, NX_CTLR_NO_METER,
+            ofpacts);
+        ofpbuf_put(ofpacts, &load->imm.value.be16_int, sizeof(ovs_be16));
+        encode_finish_controller_op(oc_offset, ofpacts);
+        break;
+    }
+    case OVN_FIELD_N_IDS:
+    default:
+        OVS_NOT_REACHED();
+    }
+}
+
+static void
+parse_check_pkt_larger(struct action_context *ctx,
+                       const struct expr_field *dst,
+                       struct ovnact_check_pkt_larger *cipl)
+{
+     /* Validate that the destination is a 1-bit, modifiable field. */
+    char *error = expr_type_check(dst, 1, true);
+    if (error) {
+        lexer_error(ctx->lexer, "%s", error);
+        free(error);
+        return;
+    }
+
+    int pkt_len;
+    lexer_get(ctx->lexer); /* Skip check_pkt_len. */
+    if (!lexer_force_match(ctx->lexer, LEX_T_LPAREN)
+        || !lexer_get_int(ctx->lexer, &pkt_len)
+        || !lexer_force_match(ctx->lexer, LEX_T_RPAREN)) {
+        return;
+    }
+
+    cipl->dst = *dst;
+    cipl->pkt_len = pkt_len;
+}
+
+static void
+format_CHECK_PKT_LARGER(const struct ovnact_check_pkt_larger *cipl,
+                        struct ds *s)
+{
+    expr_field_format(&cipl->dst, s);
+    ds_put_format(s, " = check_pkt_larger(%d);", cipl->pkt_len);
+}
+
+static void
+encode_CHECK_PKT_LARGER(const struct ovnact_check_pkt_larger *cipl,
+                        const struct ovnact_encode_params *ep OVS_UNUSED,
+                        struct ofpbuf *ofpacts)
+{
+    struct ofpact_check_pkt_larger *check_pkt_larger =
+        ofpact_put_CHECK_PKT_LARGER(ofpacts);
+    check_pkt_larger->pkt_len = cipl->pkt_len;
+    check_pkt_larger->dst = expr_resolve_field(&cipl->dst);
+}
+
+static void
+ovnact_check_pkt_larger_free(struct ovnact_check_pkt_larger *cipl OVS_UNUSED)
+{
+}
+
 /* Parses an assignment or exchange or put_dhcp_opts action. */
 static void
 parse_set_action(struct action_context *ctx)
@@ -2326,6 +2437,10 @@ parse_set_action(struct action_context *ctx)
                 && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
             parse_put_nd_ra_opts(ctx, &lhs,
                                  ovnact_put_PUT_ND_RA_OPTS(ctx->ovnacts));
+        } else if (!strcmp(ctx->lexer->token.s, "check_pkt_larger")
+                && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
+            parse_check_pkt_larger(ctx, &lhs,
+                                   ovnact_put_CHECK_PKT_LARGER(ctx->ovnacts));
         } else {
             parse_assignment_action(ctx, false, &lhs);
         }
@@ -2370,6 +2485,8 @@ parse_action(struct action_context *ctx)
         parse_ARP(ctx);
     } else if (lexer_match_id(ctx->lexer, "icmp4")) {
         parse_ICMP4(ctx);
+    } else if (lexer_match_id(ctx->lexer, "icmp4_error")) {
+        parse_ICMP4_ERROR(ctx);
     } else if (lexer_match_id(ctx->lexer, "icmp6")) {
         parse_ICMP6(ctx);
     } else if (lexer_match_id(ctx->lexer, "tcp_reset")) {
