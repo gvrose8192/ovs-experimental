@@ -118,6 +118,7 @@ Dongdong                           dongdong1@huawei.com
 Dongjun                            dongj@dtdream.com
 Duan Jiong                         djduanjiong@gmail.com
 Duffie Cooley
+Dumitru Ceara                      dceara@redhat.com
 Dustin Lundquist                   dustin@null-ptr.net
 Ed Maste                           emaste@freebsd.org
 Ed Swierk                          eswierk@skyportsystems.com
@@ -221,6 +222,7 @@ Li RongQing                        lirongqing@baidu.com
 Lian-min Wang                      liang-min.wang@intel.com
 Lilijun                            jerry.lilijun@huawei.com
 Lili Huang                         huanglili.huang@huawei.com
+Liliia Butorina                    l.butorina@partner.samsung.com
 Linda Sun                          lsun@vmware.com
 Lior Neudorfer                     lior@guardicore.com
 Liu Chang                          txfh2007@aliyun.com
@@ -265,6 +267,7 @@ Natasha Gude
 Neal Shrader                       neal@digitalocean.com
 Neil McKee                         neil.mckee@inmon.com
 Neil Zhu                           zhuj@centecnetworks.com
+Nicolas J. Bouliane                nbouliane@digitalocean.com
 Nimay Desai                        nimaydesai1@gmail.com
 Nithin Raju                        nithin@vmware.com
 Niti Rohilla                       niti.rohilla@tcs.com
@@ -528,6 +531,7 @@ Kevin Mancuso                   kevin.mancuso@rackspace.com
 Kiran Shanbhog                  kiran@vmware.com
 Kirill Kabardin
 Kirkland Spector                kspector@salesforce.com
+Klemens Nanni                   klemens@posteo.de
 Koichi Yagishita                yagishita.koichi@jrc.co.jp
 Konstantin Khorenko             khorenko@openvz.org
 Kris zhang                      zhang.kris@gmail.com
