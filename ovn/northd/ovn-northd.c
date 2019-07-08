@@ -5277,6 +5277,19 @@ add_distributed_nat_routes(struct hmap *lflows, const struct ovn_port *op)
             continue;
         }
 
+        ds_put_format(&match, "inport == %s && "
+                      "ip4.src == %s && ip4.dst == %s",
+                       op->json_key, nat->logical_ip, nat->external_ip);
+        ds_put_format(&actions, "outport = %s; eth.dst = %s; "
+                      REGBIT_DISTRIBUTED_NAT" = 1; "
+                      REGBIT_NAT_REDIRECT" = 0; next;",
+                      op->od->l3dgw_port->json_key,
+                      nat->external_mac);
+        ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_ROUTING, 400,
+                      ds_cstr(&match), ds_cstr(&actions));
+        ds_clear(&match);
+        ds_clear(&actions);
+
         for (size_t j = 0; j < op->od->nbr->n_nat; j++) {
             const struct nbrec_nat *nat2 = op->od->nbr->nat[j];
 
@@ -6621,6 +6634,8 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                                   count_1bits(ntohl(mask)) + 1,
                                   ds_cstr(&match), ds_cstr(&actions));
                 } else {
+                    uint16_t priority = count_1bits(ntohl(mask)) + 1;
+
                     /* Distributed router. */
                     ds_clear(&match);
                     ds_put_format(&match, "ip && ip4.src == %s"
@@ -6630,6 +6645,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     if (!distributed && od->l3redirect_port) {
                         /* Flows for NAT rules that are centralized are only
                          * programmed on the "redirect-chassis". */
+                        priority += 128;
                         ds_put_format(&match, " && is_chassis_resident(%s)",
                                       od->l3redirect_port->json_key);
                     }
@@ -6644,8 +6660,8 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                      * nat->logical_ip with the longest mask gets a higher
                      * priority. */
                     ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT,
-                                  count_1bits(ntohl(mask)) + 1,
-                                  ds_cstr(&match), ds_cstr(&actions));
+                                  priority, ds_cstr(&match),
+                                  ds_cstr(&actions));
                 }
             }
 
