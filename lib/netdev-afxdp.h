@@ -33,9 +33,11 @@ struct smap;
 struct dp_packet;
 struct netdev_rxq;
 struct netdev_stats;
+struct netdev_custom_stats;
 
 int netdev_afxdp_rxq_construct(struct netdev_rxq *rxq_);
 void netdev_afxdp_rxq_destruct(struct netdev_rxq *rxq_);
+int netdev_afxdp_construct(struct netdev *netdev_);
 void netdev_afxdp_destruct(struct netdev *netdev_);
 
 int netdev_afxdp_rxq_recv(struct netdev_rxq *rxq_,
@@ -50,6 +52,9 @@ int netdev_afxdp_get_config(const struct netdev *netdev, struct smap *args);
 int netdev_afxdp_get_numa_id(const struct netdev *netdev);
 int netdev_afxdp_get_stats(const struct netdev *netdev_,
                            struct netdev_stats *stats);
+int netdev_afxdp_get_custom_stats(const struct netdev *netdev,
+                                  struct netdev_custom_stats *custom_stats);
+
 
 void free_afxdp_buf(struct dp_packet *p);
 int netdev_afxdp_reconfigure(struct netdev *netdev);

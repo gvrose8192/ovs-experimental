@@ -906,7 +906,7 @@ netdev_linux_common_construct(struct netdev *netdev_)
 }
 
 /* Creates system and internal devices. */
-static int
+int
 netdev_linux_construct(struct netdev *netdev_)
 {
     struct netdev_linux *netdev = netdev_linux_cast(netdev_);
@@ -3290,9 +3290,10 @@ const struct netdev_class netdev_afxdp_class = {
     NETDEV_LINUX_CLASS_COMMON,
     .type = "afxdp",
     .is_pmd = true,
-    .construct = netdev_linux_construct,
+    .construct = netdev_afxdp_construct,
     .destruct = netdev_afxdp_destruct,
     .get_stats = netdev_afxdp_get_stats,
+    .get_custom_stats = netdev_afxdp_get_custom_stats,
     .get_status = netdev_linux_get_status,
     .set_config = netdev_afxdp_set_config,
     .get_config = netdev_afxdp_get_config,
