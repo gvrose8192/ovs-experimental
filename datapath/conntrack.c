@@ -569,6 +569,10 @@ static int handle_fragments(struct net *net, struct sw_flow_key *key,
 		kfree_skb(skb);
 		return -EPFNOSUPPORT;
 	}
+	/* The key extracted from the fragment that completed this datagram
+	 * likely didn't have an L4 header, so regenerate it.
+	 */
+	ovs_flow_key_update(skb, key);
 
 	key->ip.frag = OVS_FRAG_TYPE_NONE;
 	skb_clear_hash(skb);
