@@ -132,7 +132,7 @@ function build_ovs()
         make -j4
         popd
     else
-        make -j4
+        make -j4 || { cat config.log; exit 1; }
     fi
 }
 
@@ -172,7 +172,7 @@ if [ "$TESTSUITE" ]; then
     export DISTCHECK_CONFIGURE_FLAGS="$OPTS"
     if ! make distcheck TESTSUITEFLAGS=-j4 RECHECK=yes; then
         # testsuite.log is necessary for debugging.
-        cat */_build/tests/testsuite.log
+        cat */_build/sub/tests/testsuite.log
         exit 1
     fi
 else
