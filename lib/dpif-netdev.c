@@ -7223,6 +7223,10 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                 /* Silently ignored, as userspace datapath does not generate
                  * netlink events. */
                 break;
+            case OVS_CT_ATTR_TIMEOUT:
+                /* Userspace datapath does not support customized timeout
+                 * policy yet. */
+                break;
             case OVS_CT_ATTR_NAT: {
                 const struct nlattr *b_nest;
                 unsigned int left_nest;
@@ -7566,6 +7570,13 @@ const struct dpif_class dpif_netdev_class = {
     NULL,                       /* ct_set_limits */
     NULL,                       /* ct_get_limits */
     NULL,                       /* ct_del_limits */
+    NULL,                       /* ct_set_timeout_policy */
+    NULL,                       /* ct_get_timeout_policy */
+    NULL,                       /* ct_del_timeout_policy */
+    NULL,                       /* ct_timeout_policy_dump_start */
+    NULL,                       /* ct_timeout_policy_dump_next */
+    NULL,                       /* ct_timeout_policy_dump_done */
+    NULL,                       /* ct_get_timeout_policy_name */
     dpif_netdev_ipf_set_enabled,
     dpif_netdev_ipf_set_min_frag,
     dpif_netdev_ipf_set_max_nfrags,
