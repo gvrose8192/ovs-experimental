@@ -922,44 +922,6 @@ static int erspan_tunnel_init(struct net_device *dev)
 	return ip_tunnel_init(dev);
 }
 
-static int ipgre_header(struct sk_buff *skb, struct net_device *dev,
-			unsigned short type,
-			const void *daddr, const void *saddr, unsigned int len)
-{
-	struct ip_tunnel *t = netdev_priv(dev);
-	struct iphdr *iph;
-	struct gre_base_hdr *greh;
-
-	iph = (struct iphdr *)__skb_push(skb, t->hlen + sizeof(*iph));
-	greh = (struct gre_base_hdr *)(iph+1);
-	greh->flags = gre_tnl_flags_to_gre_flags(t->parms.o_flags);
-	greh->protocol = htons(type);
-
-	memcpy(iph, &t->parms.iph, sizeof(struct iphdr));
-
-	/* Set the source hardware address. */
-	if (saddr)
-		memcpy(&iph->saddr, saddr, 4);
-	if (daddr)
-		memcpy(&iph->daddr, daddr, 4);
-	if (iph->daddr)
-		return t->hlen + sizeof(*iph);
-
-	return -(t->hlen + sizeof(*iph));
-}
-
-static int ipgre_header_parse(const struct sk_buff *skb, unsigned char *haddr)
-{
-	const struct iphdr *iph = (const struct iphdr *) skb_mac_header(skb);
-	memcpy(haddr, &iph->saddr, 4);
-	return 4;
-}
-
-static const struct header_ops ipgre_header_ops = {
-	.create	= ipgre_header,
-	.parse	= ipgre_header_parse,
-};
-
 static int ipgre_tunnel_init(struct net_device *dev)
 {
 	struct ip_tunnel *tunnel = netdev_priv(dev);
@@ -1023,22 +985,6 @@ free_skb:
 	dev->stats.tx_dropped++;
 	return NETDEV_TX_OK;
 }
-
-static const struct net_device_ops ipgre_netdev_ops = {
-	.ndo_init		= ipgre_tunnel_init,
-	.ndo_uninit		= rpl_ip_tunnel_uninit,
-	.ndo_start_xmit		= ipgre_xmit,
-#ifdef	HAVE_RHEL7_MAX_MTU
-	.ndo_size		= sizeof(struct net_device_ops),
-	.extended.ndo_change_mtu = ip_tunnel_change_mtu,
-#else
-	.ndo_change_mtu		= ip_tunnel_change_mtu,
-#endif
-	.ndo_get_stats64	= ip_tunnel_get_stats64,
-#ifdef HAVE_GET_LINK_NET
-	.ndo_get_iflink		= ip_tunnel_get_iflink,
-#endif
-};
 
 static const struct net_device_ops gre_tap_netdev_ops = {
 	.ndo_init		= gre_tap_init,
