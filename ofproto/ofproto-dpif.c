@@ -4884,12 +4884,13 @@ ofproto_dpif_xcache_execute(struct ofproto_dpif *ofproto,
 }
 
 static void
-packet_execute(struct ofproto *ofproto_, struct ofproto_packet_out *opo)
+packet_execute_prepare(struct ofproto *ofproto_,
+                       struct ofproto_packet_out *opo)
     OVS_REQUIRES(ofproto_mutex)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
     struct dpif_flow_stats stats;
-    struct dpif_execute execute;
+    struct dpif_execute *execute;
 
     struct ofproto_dpif_packet_out *aux = opo->aux;
     ovs_assert(aux);
@@ -4898,22 +4899,40 @@ packet_execute(struct ofproto *ofproto_, struct ofproto_packet_out *opo)
     dpif_flow_stats_extract(opo->flow, opo->packet, time_msec(), &stats);
     ofproto_dpif_xcache_execute(ofproto, &aux->xcache, &stats);
 
-    execute.actions = aux->odp_actions.data;
-    execute.actions_len = aux->odp_actions.size;
+    execute = xzalloc(sizeof *execute);
+    execute->actions = xmemdup(aux->odp_actions.data, aux->odp_actions.size);
+    execute->actions_len = aux->odp_actions.size;
 
     pkt_metadata_from_flow(&opo->packet->md, opo->flow);
-    execute.packet = opo->packet;
-    execute.flow = opo->flow;
-    execute.needs_help = aux->needs_help;
-    execute.probe = false;
-    execute.mtu = 0;
+    execute->packet = opo->packet;
+    execute->flow = opo->flow;
+    execute->needs_help = aux->needs_help;
+    execute->probe = false;
+    execute->mtu = 0;
 
     /* Fix up in_port. */
     ofproto_dpif_set_packet_odp_port(ofproto, opo->flow->in_port.ofp_port,
                                      opo->packet);
 
-    dpif_execute(ofproto->backer->dpif, &execute);
     ofproto_dpif_packet_out_delete(aux);
+    opo->aux = execute;
+}
+
+static void
+packet_execute(struct ofproto *ofproto_, struct ofproto_packet_out *opo)
+    OVS_EXCLUDED(ofproto_mutex)
+{
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+    struct dpif_execute *execute = opo->aux;
+
+    if (!execute) {
+        return;
+    }
+
+    dpif_execute(ofproto->backer->dpif, execute);
+
+    free(CONST_CAST(struct nlattr *, execute->actions));
+    free(execute);
     opo->aux = NULL;
 }
 
@@ -5504,7 +5523,6 @@ ct_del_zone_timeout_policy(const char *datapath_type, uint16_t zone_id)
 static void
 get_datapath_cap(const char *datapath_type, struct smap *cap)
 {
-    char *str_value;
     struct odp_support odp;
     struct dpif_backer_support s;
     struct dpif_backer *backer = shash_find_data(&all_dpif_backers,
@@ -5516,14 +5534,9 @@ get_datapath_cap(const char *datapath_type, struct smap *cap)
     odp = s.odp;
 
     /* ODP_SUPPORT_FIELDS */
-    str_value = xasprintf("%"PRIuSIZE, odp.max_vlan_headers);
-    smap_add(cap, "max_vlan_headers", str_value);
-    free(str_value);
-
-    str_value = xasprintf("%"PRIuSIZE, odp.max_mpls_depth);
-    smap_add(cap, "max_mpls_depth", str_value);
-    free(str_value);
-
+    smap_add_format(cap, "max_vlan_headers", "%"PRIuSIZE,
+                    odp.max_vlan_headers);
+    smap_add_format(cap, "max_mpls_depth", "%"PRIuSIZE, odp.max_mpls_depth);
     smap_add(cap, "recirc", odp.recirc ? "true" : "false");
     smap_add(cap, "ct_state", odp.ct_state ? "true" : "false");
     smap_add(cap, "ct_zone", odp.ct_zone ? "true" : "false");
@@ -5543,11 +5556,7 @@ get_datapath_cap(const char *datapath_type, struct smap *cap)
     smap_add(cap, "sample_nesting", s.sample_nesting ? "true" : "false");
     smap_add(cap, "ct_eventmask", s.ct_eventmask ? "true" : "false");
     smap_add(cap, "ct_clear", s.ct_clear ? "true" : "false");
-
-    str_value = xasprintf("%"PRIuSIZE, s.max_hash_alg);
-    smap_add(cap, "max_hash_alg", str_value);
-    free(str_value);
-
+    smap_add_format(cap, "max_hash_alg", "%"PRIuSIZE, s.max_hash_alg);
     smap_add(cap, "check_pkt_len", s.check_pkt_len ? "true" : "false");
     smap_add(cap, "ct_timeout", s.ct_timeout ? "true" : "false");
 }
@@ -6637,6 +6646,7 @@ const struct ofproto_class ofproto_dpif_class = {
     rule_get_stats,
     packet_xlate,
     packet_xlate_revert,
+    packet_execute_prepare,
     packet_execute,
     set_frag_handling,
     nxt_resume,
@@ -6689,9 +6699,9 @@ const struct ofproto_class ofproto_dpif_class = {
     NULL,                       /* group_modify */
     group_get_stats,            /* group_get_stats */
     get_datapath_version,       /* get_datapath_version */
+    get_datapath_cap,
     type_set_config,
     ct_flush,                   /* ct_flush */
     ct_set_zone_timeout_policy,
     ct_del_zone_timeout_policy,
-    get_datapath_cap,
 };

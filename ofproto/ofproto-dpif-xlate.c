@@ -3118,6 +3118,13 @@ xlate_normal(struct xlate_ctx *ctx)
 
         if (mac_port) {
             struct xbundle *mac_xbundle = xbundle_lookup(ctx->xcfg, mac_port);
+
+            if (mac_xbundle && xbundle_mirror_out(ctx->xbridge, mac_xbundle)) {
+                xlate_report(ctx, OFT_WARN,
+                             "learned port is a mirror port, dropping");
+                return;
+            }
+
             if (mac_xbundle
                 && mac_xbundle != in_xbundle
                 && mac_xbundle->ofbundle != in_xbundle->ofbundle) {
@@ -4369,6 +4376,7 @@ xlate_table_action(struct xlate_ctx *ctx, ofp_port_t in_port, uint8_t table_id,
                 !is_ip_any(&ctx->xin->flow)) {
                 xlate_report_error(ctx,
                                    "resubmit(ct) with non-tracked or non-IP packet!");
+                ctx->table_id = old_table_id;
                 return;
             }
             tuple_swap(&ctx->xin->flow, ctx->wc);

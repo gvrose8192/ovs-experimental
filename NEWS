@@ -7,6 +7,7 @@ Post-v2.12.0
    - Userspace datapath:
      * Add option to enable, disable and query TCP sequence checking in
        conntrack.
+     * Add support for conntrack zone limits.
    - AF_XDP:
      * New option 'use-need-wakeup' for netdev-afxdp to control enabling
        of corresponding 'need_wakeup' flag in AF_XDP rings.  Enabled by default
@@ -22,6 +23,9 @@ Post-v2.12.0
      * DPDK pdump packet capture support disabled by default. New configure
        option '--enable-dpdk-pdump' to enable it.
      * DPDK pdump support is deprecated and will be removed in next releases.
+     * DPDK ring ports (dpdkr) are deprecated and will be removed in next
+       releases.
+     * Add support for DPDK 19.11.
 
 v2.12.0 - 03 Sep 2019
 ---------------------
