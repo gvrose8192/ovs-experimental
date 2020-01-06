@@ -14,7 +14,6 @@ addons:
   apt:
     packages:
       - bc
-      - gcc-multilib
       - libssl-dev
       - llvm-dev
       - libjemalloc1
@@ -22,11 +21,11 @@ addons:
       - libnuma-dev
       - libpcap-dev
       - python3-openssl
+      - python3-pip
       - python3-sphinx
       - libelf-dev
       - selinux-policy-dev
       - libunbound-dev
-      - libunbound-dev:i386
       - libunwind-dev
 
 before_install: ./.travis/${TRAVIS_OS_NAME}-prepare.sh

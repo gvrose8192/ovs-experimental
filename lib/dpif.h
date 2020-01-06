@@ -435,6 +435,8 @@ struct dpif_dp_stats {
 };
 int dpif_get_dp_stats(const struct dpif *, struct dpif_dp_stats *);
 
+int dpif_set_features(struct dpif *, uint32_t new_features);
+
 
 /* Port operations. */
 
@@ -492,6 +494,18 @@ void dpif_port_poll_wait(const struct dpif *);
 struct dpif_flow_stats {
     uint64_t n_packets;
     uint64_t n_bytes;
+    long long int used;
+    uint16_t tcp_flags;
+};
+
+/* more statistics info for offloaded packets and bytes */
+struct dpif_flow_detailed_stats {
+    uint64_t n_packets;
+    uint64_t n_bytes;
+    /* n_offload_packets are a subset of n_packets */
+    uint64_t n_offload_packets;
+    /* n_offload_bytes are a subset of n_bytes */
+    uint64_t n_offload_bytes;
     long long int used;
     uint16_t tcp_flags;
 };

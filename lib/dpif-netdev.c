@@ -1802,7 +1802,6 @@ static int
 port_create(const char *devname, const char *type,
             odp_port_t port_no, struct dp_netdev_port **portp)
 {
-    struct netdev_saved_flags *sf;
     struct dp_netdev_port *port;
     enum netdev_flags flags;
     struct netdev *netdev;
@@ -1824,17 +1823,11 @@ port_create(const char *devname, const char *type,
         goto out;
     }
 
-    error = netdev_turn_flags_on(netdev, NETDEV_PROMISC, &sf);
-    if (error) {
-        VLOG_ERR("%s: cannot set promisc flag", devname);
-        goto out;
-    }
-
     port = xzalloc(sizeof *port);
     port->port_no = port_no;
     port->netdev = netdev;
     port->type = xstrdup(type);
-    port->sf = sf;
+    port->sf = NULL;
     port->emc_enabled = true;
     port->need_reconfigure = true;
     ovs_mutex_init(&port->txq_used_mutex);
@@ -1853,6 +1846,7 @@ do_add_port(struct dp_netdev *dp, const char *devname, const char *type,
             odp_port_t port_no)
     OVS_REQUIRES(dp->port_mutex)
 {
+    struct netdev_saved_flags *sf;
     struct dp_netdev_port *port;
     int error;
 
@@ -1872,7 +1866,24 @@ do_add_port(struct dp_netdev *dp, const char *devname, const char *type,
     reconfigure_datapath(dp);
 
     /* Check that port was successfully configured. */
-    return dp_netdev_lookup_port(dp, port_no) ? 0 : EINVAL;
+    if (!dp_netdev_lookup_port(dp, port_no)) {
+        return EINVAL;
+    }
+
+    /* Updating device flags triggers an if_notifier, which triggers a bridge
+     * reconfiguration and another attempt to add this port, leading to an
+     * infinite loop if the device is configured incorrectly and cannot be
+     * added.  Setting the promisc mode after a successful reconfiguration,
+     * since we already know that the device is somehow properly configured. */
+    error = netdev_turn_flags_on(port->netdev, NETDEV_PROMISC, &sf);
+    if (error) {
+        VLOG_ERR("%s: cannot set promisc flag", devname);
+        do_del_port(dp, port);
+        return error;
+    }
+    port->sf = sf;
+
+    return 0;
 }
 
 static int
@@ -2269,9 +2280,13 @@ mark_to_flow_disassociate(struct dp_netdev_pmd_thread *pmd,
         struct netdev *port;
         odp_port_t in_port = flow->flow.in_port.odp_port;
 
-        port = netdev_ports_get(in_port, pmd->dp->dpif->dpif_class);
+        port = netdev_ports_get(in_port, pmd->dp->class);
         if (port) {
+            /* Taking a global 'port_mutex' to fulfill thread safety
+             * restrictions for the netdev-offload-dpdk module. */
+            ovs_mutex_lock(&pmd->dp->port_mutex);
             ret = netdev_flow_del(port, &flow->mega_ufid, NULL);
+            ovs_mutex_unlock(&pmd->dp->port_mutex);
             netdev_close(port);
         }
 
@@ -2410,15 +2425,19 @@ dp_netdev_flow_offload_put(struct dp_flow_offload_item *offload)
     }
     info.flow_mark = mark;
 
-    port = netdev_ports_get(in_port, pmd->dp->dpif->dpif_class);
+    port = netdev_ports_get(in_port, pmd->dp->class);
     if (!port || netdev_vport_is_vport_class(port->netdev_class)) {
         netdev_close(port);
         goto err_free;
     }
+    /* Taking a global 'port_mutex' to fulfill thread safety restrictions for
+     * the netdev-offload-dpdk module. */
+    ovs_mutex_lock(&pmd->dp->port_mutex);
     ret = netdev_flow_put(port, &offload->match,
                           CONST_CAST(struct nlattr *, offload->actions),
                           offload->actions_len, &flow->mega_ufid, &info,
                           NULL);
+    ovs_mutex_unlock(&pmd->dp->port_mutex);
     netdev_close(port);
 
     if (ret) {
@@ -7619,6 +7638,7 @@ const struct dpif_class dpif_netdev_class = {
     dpif_netdev_run,
     dpif_netdev_wait,
     dpif_netdev_get_stats,
+    NULL,                      /* set_features */
     dpif_netdev_port_add,
     dpif_netdev_port_del,
     dpif_netdev_port_set_config,

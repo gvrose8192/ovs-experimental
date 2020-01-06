@@ -47,6 +47,7 @@
 #include "dpdk.h"
 #include "dpif-netdev.h"
 #include "fatal-signal.h"
+#include "if-notifier.h"
 #include "netdev-provider.h"
 #include "netdev-vport.h"
 #include "odp-util.h"
@@ -74,6 +75,7 @@ VLOG_DEFINE_THIS_MODULE(netdev_dpdk);
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
 
 COVERAGE_DEFINE(vhost_tx_contention);
+COVERAGE_DEFINE(vhost_notification);
 
 #define DPDK_PORT_WATCHDOG_INTERVAL 5
 
@@ -168,6 +170,8 @@ static int new_device(int vid);
 static void destroy_device(int vid);
 static int vring_state_changed(int vid, uint16_t queue_id, int enable);
 static void destroy_connection(int vid);
+static void vhost_guest_notified(int vid);
+
 static const struct vhost_device_ops virtio_net_device_ops =
 {
     .new_device =  new_device,
@@ -176,6 +180,7 @@ static const struct vhost_device_ops virtio_net_device_ops =
     .features_changed = NULL,
     .new_connection = NULL,
     .destroy_connection = destroy_connection,
+    .guest_notified = vhost_guest_notified,
 };
 
 /* Custom software stats for dpdk ports */
@@ -383,6 +388,8 @@ struct netdev_dpdk {
         bool attached;
         /* If true, rte_eth_dev_start() was successfully called */
         bool started;
+        bool reset_needed;
+        /* 1 pad byte here. */
         struct eth_addr hwaddr;
         int mtu;
         int socket_id;
@@ -1161,6 +1168,8 @@ common_construct(struct netdev *netdev, dpdk_port_t port_no,
     ovsrcu_index_init(&dev->vid, -1);
     dev->vhost_reconfigured = false;
     dev->attached = false;
+    dev->started = false;
+    dev->reset_needed = false;
 
     ovsrcu_init(&dev->qos_conf, NULL);
 
@@ -1759,6 +1768,34 @@ netdev_dpdk_process_devargs(struct netdev_dpdk *dev,
     return new_port_id;
 }
 
+static int
+dpdk_eth_event_callback(dpdk_port_t port_id, enum rte_eth_event_type type,
+                        void *param OVS_UNUSED, void *ret_param OVS_UNUSED)
+{
+    struct netdev_dpdk *dev;
+
+    switch ((int) type) {
+    case RTE_ETH_EVENT_INTR_RESET:
+        ovs_mutex_lock(&dpdk_mutex);
+        dev = netdev_dpdk_lookup_by_port_id(port_id);
+        if (dev) {
+            ovs_mutex_lock(&dev->mutex);
+            dev->reset_needed = true;
+            netdev_request_reconfigure(&dev->up);
+            VLOG_DBG_RL(&rl, "%s: Device reset requested.",
+                        netdev_get_name(&dev->up));
+            ovs_mutex_unlock(&dev->mutex);
+        }
+        ovs_mutex_unlock(&dpdk_mutex);
+        break;
+
+    default:
+        /* Ignore all other types. */
+        break;
+   }
+   return 0;
+}
+
 static void
 dpdk_set_rxq_config(struct netdev_dpdk *dev, const struct smap *args)
     OVS_REQUIRES(dev->mutex)
@@ -2174,7 +2211,6 @@ netdev_dpdk_vhost_update_rx_counters(struct netdev_dpdk *dev,
                                      struct dp_packet **packets, int count,
                                      int qos_drops)
 {
-    struct netdev_dpdk_sw_stats *sw_stats = dev->sw_stats;
     struct netdev_stats *stats = &dev->stats;
     struct dp_packet *packet;
     unsigned int packet_size;
@@ -2205,7 +2241,9 @@ netdev_dpdk_vhost_update_rx_counters(struct netdev_dpdk *dev,
         stats->rx_bytes += packet_size;
     }
 
-    sw_stats->rx_qos_drops += qos_drops;
+    if (OVS_UNLIKELY(qos_drops)) {
+        dev->sw_stats->rx_qos_drops += qos_drops;
+    }
 }
 
 /*
@@ -2369,7 +2407,6 @@ netdev_dpdk_vhost_update_tx_counters(struct netdev_dpdk *dev,
                                      int attempted,
                                      struct netdev_dpdk_sw_stats *sw_stats_add)
 {
-    struct netdev_dpdk_sw_stats *sw_stats = dev->sw_stats;
     int dropped = sw_stats_add->tx_mtu_exceeded_drops +
                   sw_stats_add->tx_qos_drops +
                   sw_stats_add->tx_failure_drops;
@@ -2384,10 +2421,14 @@ netdev_dpdk_vhost_update_tx_counters(struct netdev_dpdk *dev,
         stats->tx_bytes += dp_packet_size(packets[i]);
     }
 
-    sw_stats->tx_retries            += sw_stats_add->tx_retries;
-    sw_stats->tx_failure_drops      += sw_stats_add->tx_failure_drops;
-    sw_stats->tx_mtu_exceeded_drops += sw_stats_add->tx_mtu_exceeded_drops;
-    sw_stats->tx_qos_drops          += sw_stats_add->tx_qos_drops;
+    if (OVS_UNLIKELY(dropped || sw_stats_add->tx_retries)) {
+        struct netdev_dpdk_sw_stats *sw_stats = dev->sw_stats;
+
+        sw_stats->tx_retries            += sw_stats_add->tx_retries;
+        sw_stats->tx_failure_drops      += sw_stats_add->tx_failure_drops;
+        sw_stats->tx_mtu_exceeded_drops += sw_stats_add->tx_mtu_exceeded_drops;
+        sw_stats->tx_qos_drops          += sw_stats_add->tx_qos_drops;
+    }
 }
 
 static void
@@ -3844,6 +3885,12 @@ destroy_connection(int vid)
     }
 }
 
+static
+void vhost_guest_notified(int vid OVS_UNUSED)
+{
+    COVERAGE_INC(vhost_notification);
+}
+
 /*
  * Retrieve the DPDK virtio device ID (vid) associated with a vhostuser
  * or vhostuserclient netdev.
@@ -3877,6 +3924,8 @@ netdev_dpdk_class_init(void)
     /* This function can be called for different classes.  The initialization
      * needs to be done only once */
     if (ovsthread_once_start(&once)) {
+        int ret;
+
         ovs_thread_create("dpdk_watchdog", dpdk_watchdog, NULL);
         unixctl_command_register("netdev-dpdk/set-admin-state",
                                  "[netdev] up|down", 1, 2,
@@ -3889,6 +3938,14 @@ netdev_dpdk_class_init(void)
         unixctl_command_register("netdev-dpdk/get-mempool-info",
                                  "[netdev]", 0, 1,
                                  netdev_dpdk_get_mempool_info, NULL);
+
+        ret = rte_eth_dev_callback_register(RTE_ETH_ALL,
+                                            RTE_ETH_EVENT_INTR_RESET,
+                                            dpdk_eth_event_callback, NULL);
+        if (ret != 0) {
+            VLOG_ERR("Ethernet device callback register error: %s",
+                     rte_strerror(-ret));
+        }
 
         ovsthread_once_done(&once);
     }
@@ -4254,13 +4311,20 @@ netdev_dpdk_reconfigure(struct netdev *netdev)
         && dev->rxq_size == dev->requested_rxq_size
         && dev->txq_size == dev->requested_txq_size
         && dev->socket_id == dev->requested_socket_id
-        && dev->started) {
+        && dev->started && !dev->reset_needed) {
         /* Reconfiguration is unnecessary */
 
         goto out;
     }
 
-    rte_eth_dev_stop(dev->port_id);
+    if (dev->reset_needed) {
+        rte_eth_dev_reset(dev->port_id);
+        if_notifier_manual_report();
+        dev->reset_needed = false;
+    } else {
+        rte_eth_dev_stop(dev->port_id);
+    }
+
     dev->started = false;
 
     err = netdev_dpdk_mempool_configure(dev);
