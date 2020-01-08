@@ -215,12 +215,13 @@ Kevin Traynor                      kevin.traynor@intel.com
 Khem Raj                           raj.khem@gmail.com
 Kmindg G                           kmindg@gmail.com
 Kris Murphy                        kriskend@linux.vnet.ibm.com
+Krishna Kolakaluri                 kkolakaluri@plume.com
 Krishna Kondaka                    kkondaka@vmware.com
 Kyle Mestery                       mestery@mestery.com
 Kyle Simpson                       kyleandrew.simpson@gmail.com
 Kyle Upton                         kupton@baymicrosystems.com
 Lance Yang                         lance.yang@arm.com
-Lance Richardson                   lrichard@redhat.com
+Lance Richardson                   lance.richardson@broadcom.com
 Lars Kellogg-Stedman               lars@redhat.com
 Lei Huang                          huang.f.lei@gmail.com
 Leif Madsen                        lmadsen@redhat.com

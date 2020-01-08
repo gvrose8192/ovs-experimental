@@ -860,6 +860,12 @@ ovs_native_tunneling_is_on(struct ofproto_dpif *ofproto)
         && atomic_count_get(&ofproto->backer->tnl_count);
 }
 
+bool
+ovs_explicit_drop_action_supported(struct ofproto_dpif *ofproto)
+{
+    return ofproto->backer->rt_support.explicit_drop_action;
+}
+
 /* Tests whether 'backer''s datapath supports recirculation.  Only newer
  * datapaths support OVS_KEY_ATTR_RECIRC_ID in keys.  We need to disable some
  * features on older datapaths that don't support this feature.
@@ -923,7 +929,7 @@ check_ufid(struct dpif_backer *backer)
 
     ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
     odp_flow_key_from_flow(&odp_parms, &key);
-    dpif_flow_hash(backer->dpif, key.data, key.size, &ufid);
+    odp_flow_key_hash(key.data, key.size, &ufid);
 
     enable_ufid = dpif_probe_feature(backer->dpif, "UFID", &key, NULL, &ufid);
 
@@ -1073,7 +1079,6 @@ check_masked_set_action(struct dpif_backer *backer)
 {
     struct eth_header *eth;
     struct ofpbuf actions;
-    struct dpif_execute execute;
     struct dp_packet packet;
     struct flow flow;
     int error;
@@ -1098,14 +1103,13 @@ check_masked_set_action(struct dpif_backer *backer)
 
     /* Execute the actions.  On older datapaths this fails with EINVAL, on
      * newer datapaths it succeeds. */
-    execute.actions = actions.data;
-    execute.actions_len = actions.size;
-    execute.packet = &packet;
-    execute.flow = &flow;
-    execute.needs_help = false;
-    execute.probe = true;
-    execute.mtu = 0;
-
+    struct dpif_execute execute = {
+        .actions = actions.data,
+        .actions_len = actions.size,
+        .packet = &packet,
+        .flow = &flow,
+        .probe = true,
+    };
     error = dpif_execute(backer->dpif, &execute);
 
     dp_packet_uninit(&packet);
@@ -1127,7 +1131,6 @@ check_trunc_action(struct dpif_backer *backer)
 {
     struct eth_header *eth;
     struct ofpbuf actions;
-    struct dpif_execute execute;
     struct dp_packet packet;
     struct ovs_action_trunc *trunc;
     struct flow flow;
@@ -1152,14 +1155,13 @@ check_trunc_action(struct dpif_backer *backer)
 
     /* Execute the actions.  On older datapaths this fails with EINVAL, on
      * newer datapaths it succeeds. */
-    execute.actions = actions.data;
-    execute.actions_len = actions.size;
-    execute.packet = &packet;
-    execute.flow = &flow;
-    execute.needs_help = false;
-    execute.probe = true;
-    execute.mtu = 0;
-
+    struct dpif_execute execute = {
+        .actions = actions.data,
+        .actions_len = actions.size,
+        .packet = &packet,
+        .flow = &flow,
+        .probe = true,
+    };
     error = dpif_execute(backer->dpif, &execute);
 
     dp_packet_uninit(&packet);
@@ -1181,7 +1183,6 @@ check_trunc_action(struct dpif_backer *backer)
 static bool
 check_clone(struct dpif_backer *backer)
 {
-    struct dpif_execute execute;
     struct eth_header *eth;
     struct flow flow;
     struct dp_packet packet;
@@ -1204,14 +1205,13 @@ check_clone(struct dpif_backer *backer)
 
     /* Execute the actions.  On older datapaths this fails with EINVAL, on
      * newer datapaths it succeeds. */
-    execute.actions = actions.data;
-    execute.actions_len = actions.size;
-    execute.packet = &packet;
-    execute.flow = &flow;
-    execute.needs_help = false;
-    execute.probe = true;
-    execute.mtu = 0;
-
+    struct dpif_execute execute = {
+        .actions = actions.data,
+        .actions_len = actions.size,
+        .packet = &packet,
+        .flow = &flow,
+        .probe = true,
+    };
     error = dpif_execute(backer->dpif, &execute);
 
     dp_packet_uninit(&packet);
@@ -1233,7 +1233,6 @@ check_clone(struct dpif_backer *backer)
 static bool
 check_ct_eventmask(struct dpif_backer *backer)
 {
-    struct dpif_execute execute;
     struct dp_packet packet;
     struct ofpbuf actions;
     struct flow flow = {
@@ -1266,14 +1265,13 @@ check_ct_eventmask(struct dpif_backer *backer)
 
     /* Execute the actions.  On older datapaths this fails with EINVAL, on
      * newer datapaths it succeeds. */
-    execute.actions = actions.data;
-    execute.actions_len = actions.size;
-    execute.packet = &packet;
-    execute.flow = &flow;
-    execute.needs_help = false;
-    execute.probe = true;
-    execute.mtu = 0;
-
+    struct dpif_execute execute = {
+        .actions = actions.data,
+        .actions_len = actions.size,
+        .packet = &packet,
+        .flow = &flow,
+        .probe = true,
+    };
     error = dpif_execute(backer->dpif, &execute);
 
     dp_packet_uninit(&packet);
@@ -1328,7 +1326,6 @@ check_ct_clear(struct dpif_backer *backer)
 static bool
 check_ct_timeout_policy(struct dpif_backer *backer)
 {
-    struct dpif_execute execute;
     struct dp_packet packet;
     struct ofpbuf actions;
     struct flow flow = {
@@ -1361,14 +1358,13 @@ check_ct_timeout_policy(struct dpif_backer *backer)
 
     /* Execute the actions.  On older datapaths this fails with EINVAL, on
      * newer datapaths it succeeds. */
-    execute.actions = actions.data;
-    execute.actions_len = actions.size;
-    execute.packet = &packet;
-    execute.flow = &flow;
-    execute.needs_help = false;
-    execute.probe = true;
-    execute.mtu = 0;
-
+    struct dpif_execute execute = {
+        .actions = actions.data,
+        .actions_len = actions.size,
+        .packet = &packet,
+        .flow = &flow,
+        .probe = true,
+    };
     error = dpif_execute(backer->dpif, &execute);
 
     dp_packet_uninit(&packet);
@@ -1480,7 +1476,6 @@ check_nd_extensions(struct dpif_backer *backer)
 {
     struct eth_header *eth;
     struct ofpbuf actions;
-    struct dpif_execute execute;
     struct dp_packet packet;
     struct flow flow;
     int error;
@@ -1500,14 +1495,13 @@ check_nd_extensions(struct dpif_backer *backer)
     flow_extract(&packet, &flow);
 
     /* Execute the actions.  On datapaths without support fails with EINVAL. */
-    execute.actions = actions.data;
-    execute.actions_len = actions.size;
-    execute.packet = &packet;
-    execute.flow = &flow;
-    execute.needs_help = false;
-    execute.probe = true;
-    execute.mtu = 0;
-
+    struct dpif_execute execute = {
+        .actions = actions.data,
+        .actions_len = actions.size,
+        .packet = &packet,
+        .flow = &flow,
+        .probe = true,
+    };
     error = dpif_execute(backer->dpif, &execute);
 
     dp_packet_uninit(&packet);
@@ -1584,6 +1578,8 @@ check_support(struct dpif_backer *backer)
     backer->rt_support.max_hash_alg = check_max_dp_hash_alg(backer);
     backer->rt_support.check_pkt_len = check_check_pkt_len(backer);
     backer->rt_support.ct_timeout = check_ct_timeout_policy(backer);
+    backer->rt_support.explicit_drop_action =
+        dpif_supports_explicit_drop_action(backer->dpif);
 
     /* Flow fields. */
     backer->rt_support.odp.ct_state = check_ct_state(backer);
@@ -4160,7 +4156,6 @@ ofproto_dpif_execute_actions__(struct ofproto_dpif *ofproto,
     struct dpif_flow_stats stats;
     struct xlate_out xout;
     struct xlate_in xin;
-    struct dpif_execute execute;
     int error;
 
     ovs_assert((rule != NULL) != (ofpacts != NULL));
@@ -4185,15 +4180,15 @@ ofproto_dpif_execute_actions__(struct ofproto_dpif *ofproto,
         goto out;
     }
 
-    execute.actions = odp_actions.data;
-    execute.actions_len = odp_actions.size;
-
     pkt_metadata_from_flow(&packet->md, flow);
-    execute.packet = packet;
-    execute.flow = flow;
-    execute.needs_help = (xout.slow & SLOW_ACTION) != 0;
-    execute.probe = false;
-    execute.mtu = 0;
+
+    struct dpif_execute execute = {
+        .actions = odp_actions.data,
+        .actions_len = odp_actions.size,
+        .packet = packet,
+        .flow = flow,
+        .needs_help = (xout.slow & SLOW_ACTION) != 0,
+    };
 
     /* Fix up in_port. */
     ofproto_dpif_set_packet_odp_port(ofproto, flow->in_port.ofp_port, packet);
@@ -5566,6 +5561,8 @@ get_datapath_cap(const char *datapath_type, struct smap *cap)
     smap_add_format(cap, "max_hash_alg", "%"PRIuSIZE, s.max_hash_alg);
     smap_add(cap, "check_pkt_len", s.check_pkt_len ? "true" : "false");
     smap_add(cap, "ct_timeout", s.ct_timeout ? "true" : "false");
+    smap_add(cap, "explicit_drop_action",
+             s.explicit_drop_action ? "true" :"false");
 }
 
 /* Gets timeout policy name in 'backer' based on 'zone', 'dl_type' and

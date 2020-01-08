@@ -105,7 +105,8 @@ TESTSUITE_AT = \
 	tests/auto-attach.at \
 	tests/mcast-snooping.at \
 	tests/packet-type-aware.at \
-	tests/nsh.at
+	tests/nsh.at \
+	tests/drop-stats.at
 
 EXTRA_DIST += $(FUZZ_REGRESSION_TESTS)
 FUZZ_REGRESSION_TESTS = \
@@ -288,6 +289,12 @@ check-afxdp-valgrind: all $(valgrind_wrappers) $(check_DATA)
 	@echo
 	@echo '----------------------------------------------------------------------'
 	@echo 'Valgrind output can be found in tests/system-afxdp-testsuite.dir/*/valgrind.*'
+	@echo '----------------------------------------------------------------------'
+check-offloads-valgrind: all $(valgrind_wrappers) $(check_DATA)
+	$(SHELL) '$(SYSTEM_OFFLOADS_TESTSUITE)' -C tests VALGRIND='$(VALGRIND)' AUTOTEST_PATH='tests/valgrind:$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS) -j1
+	@echo
+	@echo '----------------------------------------------------------------------'
+	@echo 'Valgrind output can be found in tests/system-offloads-testsuite.dir/*/valgrind.*'
 	@echo '----------------------------------------------------------------------'
 check-helgrind: all $(valgrind_wrappers) $(check_DATA)
 	-$(SHELL) '$(TESTSUITE)' -C tests CHECK_VALGRIND=true VALGRIND='$(HELGRIND)' AUTOTEST_PATH='tests/valgrind:$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS)

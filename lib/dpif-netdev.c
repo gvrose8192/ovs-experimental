@@ -102,6 +102,17 @@ enum { MAX_METERS = 65536 };    /* Maximum number of meters. */
 enum { MAX_BANDS = 8 };         /* Maximum number of bands / meter. */
 enum { N_METER_LOCKS = 64 };    /* Maximum number of meters. */
 
+COVERAGE_DEFINE(datapath_drop_meter);
+COVERAGE_DEFINE(datapath_drop_upcall_error);
+COVERAGE_DEFINE(datapath_drop_lock_error);
+COVERAGE_DEFINE(datapath_drop_userspace_action_error);
+COVERAGE_DEFINE(datapath_drop_tunnel_push_error);
+COVERAGE_DEFINE(datapath_drop_tunnel_pop_error);
+COVERAGE_DEFINE(datapath_drop_recirc_error);
+COVERAGE_DEFINE(datapath_drop_invalid_port);
+COVERAGE_DEFINE(datapath_drop_invalid_tnl_port);
+COVERAGE_DEFINE(datapath_drop_rx_invalid_packet);
+
 /* Protects against changes to 'dp_netdevs'. */
 static struct ovs_mutex dp_netdev_mutex = OVS_MUTEX_INITIALIZER;
 
@@ -303,7 +314,6 @@ struct pmd_auto_lb {
 struct dp_netdev {
     const struct dpif_class *const class;
     const char *const name;
-    struct dpif *dpif;
     struct ovs_refcount ref_cnt;
     atomic_flag destroyed;
 
@@ -1618,7 +1628,6 @@ dpif_netdev_open(const struct dpif_class *class, const char *name,
     }
     if (!error) {
         *dpifp = create_dpif_netdev(dp);
-        dp->dpif = *dpifp;
     }
     ovs_mutex_unlock(&dp_netdev_mutex);
 
@@ -3003,7 +3012,7 @@ dp_netdev_pmd_find_flow(const struct dp_netdev_pmd_thread *pmd,
     /* If a UFID is not provided, determine one based on the key. */
     if (!ufidp && key && key_len
         && !dpif_netdev_flow_from_nlattrs(key, key_len, &flow, false)) {
-        dpif_flow_hash(pmd->dp->dpif, &flow, sizeof flow, &ufid);
+        odp_flow_key_hash(&flow, sizeof flow, &ufid);
         ufidp = &ufid;
     }
 
@@ -3222,7 +3231,7 @@ dp_netdev_get_mega_ufid(const struct match *match, ovs_u128 *mega_ufid)
         ((uint8_t *)&masked_flow)[i] = ((uint8_t *)&match->flow)[i] &
                                        ((uint8_t *)&match->wc)[i];
     }
-    dpif_flow_hash(NULL, &masked_flow, sizeof(struct flow), mega_ufid);
+    odp_flow_key_hash(&masked_flow, sizeof masked_flow, mega_ufid);
 }
 
 static struct dp_netdev_flow *
@@ -3426,7 +3435,7 @@ dpif_netdev_flow_put(struct dpif *dpif, const struct dpif_flow_put *put)
     if (put->ufid) {
         ufid = *put->ufid;
     } else {
-        dpif_flow_hash(dpif, &match.flow, sizeof match.flow, &ufid);
+        odp_flow_key_hash(&match.flow, sizeof match.flow, &ufid);
     }
 
     /* The Netlink encoding of datapath flow keys cannot express
@@ -5770,7 +5779,7 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
             band = &meter->bands[exceeded_band[j]];
             band->packet_count += 1;
             band->byte_count += dp_packet_size(packet);
-
+            COVERAGE_INC(datapath_drop_meter);
             dp_packet_delete(packet);
         } else {
             /* Meter accepts packet. */
@@ -6520,6 +6529,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
 
         if (OVS_UNLIKELY(dp_packet_size(packet) < ETH_HEADER_LEN)) {
             dp_packet_delete(packet);
+            COVERAGE_INC(datapath_drop_rx_invalid_packet);
             continue;
         }
 
@@ -6634,12 +6644,13 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
     ofpbuf_clear(actions);
     ofpbuf_clear(put_actions);
 
-    dpif_flow_hash(pmd->dp->dpif, &match.flow, sizeof match.flow, &ufid);
+    odp_flow_key_hash(&match.flow, sizeof match.flow, &ufid);
     error = dp_netdev_upcall(pmd, packet, &match.flow, &match.wc,
                              &ufid, DPIF_UC_MISS, NULL, actions,
                              put_actions);
     if (OVS_UNLIKELY(error && error != ENOSPC)) {
         dp_packet_delete(packet);
+        COVERAGE_INC(datapath_drop_upcall_error);
         return error;
     }
 
@@ -6770,6 +6781,7 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
         DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
             if (OVS_UNLIKELY(!rules[i])) {
                 dp_packet_delete(packet);
+                COVERAGE_INC(datapath_drop_lock_error);
                 upcall_fail_cnt++;
             }
         }
@@ -7039,6 +7051,7 @@ dp_execute_userspace_action(struct dp_netdev_pmd_thread *pmd,
                                   actions->data, actions->size);
     } else if (should_steal) {
         dp_packet_delete(packet);
+        COVERAGE_INC(datapath_drop_userspace_action_error);
     }
 }
 
@@ -7053,6 +7066,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
     struct dp_netdev *dp = pmd->dp;
     int type = nl_attr_type(a);
     struct tx_port *p;
+    uint32_t packet_count, packets_dropped;
 
     switch ((enum ovs_action_attr)type) {
     case OVS_ACTION_ATTR_OUTPUT:
@@ -7094,6 +7108,9 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                 dp_packet_batch_add(&p->output_pkts, packet);
             }
             return;
+        } else {
+            COVERAGE_ADD(datapath_drop_invalid_port,
+                         dp_packet_batch_size(packets_));
         }
         break;
 
@@ -7106,7 +7123,11 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
             break;
         }
         dp_packet_batch_apply_cutlen(packets_);
-        push_tnl_action(pmd, a, packets_);
+        packet_count = dp_packet_batch_size(packets_);
+        if (push_tnl_action(pmd, a, packets_)) {
+            COVERAGE_ADD(datapath_drop_tunnel_push_error,
+                         packet_count);
+        }
         return;
 
     case OVS_ACTION_ATTR_TUNNEL_POP:
@@ -7126,7 +7147,14 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 
                 dp_packet_batch_apply_cutlen(packets_);
 
+                packet_count = dp_packet_batch_size(packets_);
                 netdev_pop_header(p->port->netdev, packets_);
+                packets_dropped =
+                   packet_count - dp_packet_batch_size(packets_);
+                if (packets_dropped) {
+                    COVERAGE_ADD(datapath_drop_tunnel_pop_error,
+                                 packets_dropped);
+                }
                 if (dp_packet_batch_is_empty(packets_)) {
                     return;
                 }
@@ -7141,6 +7169,11 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                 (*depth)--;
                 return;
             }
+            COVERAGE_ADD(datapath_drop_invalid_tnl_port,
+                         dp_packet_batch_size(packets_));
+        } else {
+            COVERAGE_ADD(datapath_drop_recirc_error,
+                         dp_packet_batch_size(packets_));
         }
         break;
 
@@ -7171,7 +7204,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
             struct dp_packet *packet;
             DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
                 flow_extract(packet, &flow);
-                dpif_flow_hash(dp->dpif, &flow, sizeof flow, &ufid);
+                odp_flow_key_hash(&flow, sizeof flow, &ufid);
                 dp_execute_userspace_action(pmd, packet, should_steal, &flow,
                                             &ufid, &actions, userdata);
             }
@@ -7185,6 +7218,8 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 
             return;
         }
+        COVERAGE_ADD(datapath_drop_lock_error,
+                     dp_packet_batch_size(packets_));
         break;
 
     case OVS_ACTION_ATTR_RECIRC:
@@ -7208,6 +7243,8 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
             return;
         }
 
+        COVERAGE_ADD(datapath_drop_recirc_error,
+                     dp_packet_batch_size(packets_));
         VLOG_WARN("Packet dropped. Max recirculation depth exceeded.");
         break;
 
@@ -7365,6 +7402,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
     case OVS_ACTION_ATTR_POP_NSH:
     case OVS_ACTION_ATTR_CT_CLEAR:
     case OVS_ACTION_ATTR_CHECK_PKT_LEN:
+    case OVS_ACTION_ATTR_DROP:
     case __OVS_ACTION_ATTR_MAX:
         OVS_NOT_REACHED();
     }

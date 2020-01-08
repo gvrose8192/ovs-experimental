@@ -141,6 +141,7 @@ odp_action_len(uint16_t type)
     case OVS_ACTION_ATTR_PUSH_NSH: return ATTR_LEN_VARIABLE;
     case OVS_ACTION_ATTR_POP_NSH: return 0;
     case OVS_ACTION_ATTR_CHECK_PKT_LEN: return ATTR_LEN_VARIABLE;
+    case OVS_ACTION_ATTR_DROP: return sizeof(uint32_t);
 
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
@@ -1237,6 +1238,9 @@ format_odp_action(struct ds *ds, const struct nlattr *a,
         break;
     case OVS_ACTION_ATTR_CHECK_PKT_LEN:
         format_odp_check_pkt_len_action(ds, a, portno_names);
+        break;
+    case OVS_ACTION_ATTR_DROP:
+        ds_put_cstr(ds, "drop");
         break;
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
@@ -2575,6 +2579,7 @@ odp_actions_from_string(const char *s, const struct simap *port_names,
     size_t old_size;
 
     if (!strcasecmp(s, "drop")) {
+        nl_msg_put_u32(actions, OVS_ACTION_ATTR_DROP, XLATE_OK);
         return 0;
     }
 
@@ -6430,11 +6435,20 @@ odp_key_to_dp_packet(const struct nlattr *key, size_t key_len,
     }
 }
 
-uint32_t
-odp_flow_key_hash(const struct nlattr *key, size_t key_len)
+/* Places the hash of the 'key_len' bytes starting at 'key' into '*hash'.
+ * Generated value has format of random UUID. */
+void
+odp_flow_key_hash(const void *key, size_t key_len, ovs_u128 *hash)
 {
-    BUILD_ASSERT_DECL(!(NLA_ALIGNTO % sizeof(uint32_t)));
-    return hash_bytes32(ALIGNED_CAST(const uint32_t *, key), key_len, 0);
+    static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
+    static uint32_t secret;
+
+    if (ovsthread_once_start(&once)) {
+        secret = random_uint32();
+        ovsthread_once_done(&once);
+    }
+    hash_bytes128(key, key_len, secret, hash);
+    uuid_set_bits_v4((struct uuid *)hash);
 }
 
 static void
