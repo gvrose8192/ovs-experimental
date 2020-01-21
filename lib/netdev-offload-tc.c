@@ -873,6 +873,7 @@ parse_tc_flower_to_match(struct tc_flower *flower,
     attrs->offloaded = (flower->offloaded_state == TC_OFFLOADED_STATE_IN_HW)
                        || (flower->offloaded_state == TC_OFFLOADED_STATE_UNDEFINED);
     attrs->dp_layer = "tc";
+    attrs->dp_extra_info = NULL;
 
     return 0;
 }
@@ -1634,6 +1635,10 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
             odp_port_t port = nl_attr_get_odp_port(nla);
             struct netdev *outdev = netdev_ports_get(port, info->dpif_class);
 
+            if (!outdev) {
+                VLOG_DBG_RL(&rl, "Can't find netdev for output port %d", port);
+                return ENODEV;
+            }
             action->out.ifindex_out = netdev_get_ifindex(outdev);
             action->out.ingress = is_internal_port(netdev_get_type(outdev));
             action->type = TC_ACT_OUTPUT;
