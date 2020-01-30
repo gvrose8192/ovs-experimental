@@ -1751,10 +1751,6 @@ destruct(struct ofproto *ofproto_, bool del)
     xlate_remove_ofproto(ofproto);
     xlate_txn_commit();
 
-    /* Ensure that the upcall processing threads have no remaining references
-     * to the ofproto or anything in it. */
-    udpif_synchronize(ofproto->backer->udpif);
-
     hmap_remove(&all_ofproto_dpifs_by_name,
                 &ofproto->all_ofproto_dpifs_by_name_node);
     hmap_remove(&all_ofproto_dpifs_by_uuid,
@@ -6281,9 +6277,6 @@ ofproto_unixctl_dpif_dump_flows(struct unixctl_conn *conn,
     flow_dump_thread = dpif_flow_dump_thread_create(flow_dump);
     while (dpif_flow_dump_next(flow_dump_thread, &f, 1)) {
         struct flow flow;
-
-        /* No need for extra info. */
-        free(f.attrs.dp_extra_info);
 
         if ((odp_flow_key_to_flow(f.key, f.key_len, &flow, NULL)
              == ODP_FIT_ERROR)
