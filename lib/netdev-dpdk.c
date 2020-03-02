@@ -152,6 +152,16 @@ typedef uint16_t dpdk_port_t;
 
 #define IF_NAME_SZ (PATH_MAX > IFNAMSIZ ? PATH_MAX : IFNAMSIZ)
 
+/* List of required flags advertised by the hardware that will be used
+ * if TSO is enabled. Ideally this should include DEV_TX_OFFLOAD_SCTP_CKSUM.
+ * However, very few drivers supports that the moment and SCTP is not a
+ * widely used protocol as TCP and UDP, so it's optional. */
+#define DPDK_TX_TSO_OFFLOAD_FLAGS (DEV_TX_OFFLOAD_TCP_TSO        \
+                                   | DEV_TX_OFFLOAD_TCP_CKSUM    \
+                                   | DEV_TX_OFFLOAD_UDP_CKSUM    \
+                                   | DEV_TX_OFFLOAD_IPV4_CKSUM)
+
+
 static const struct rte_eth_conf port_conf = {
     .rxmode = {
         .mq_mode = ETH_MQ_RX_RSS,
@@ -415,6 +425,7 @@ enum dpdk_hw_ol_features {
     NETDEV_RX_HW_CRC_STRIP = 1 << 1,
     NETDEV_RX_HW_SCATTER = 1 << 2,
     NETDEV_TX_TSO_OFFLOAD = 1 << 3,
+    NETDEV_TX_SCTP_CHECKSUM_OFFLOAD = 1 << 4,
 };
 
 /*
@@ -997,9 +1008,10 @@ dpdk_eth_dev_port_config(struct netdev_dpdk *dev, int n_rxq, int n_txq)
     }
 
     if (dev->hw_ol_features & NETDEV_TX_TSO_OFFLOAD) {
-        conf.txmode.offloads |= DEV_TX_OFFLOAD_TCP_TSO;
-        conf.txmode.offloads |= DEV_TX_OFFLOAD_TCP_CKSUM;
-        conf.txmode.offloads |= DEV_TX_OFFLOAD_IPV4_CKSUM;
+        conf.txmode.offloads |= DPDK_TX_TSO_OFFLOAD_FLAGS;
+        if (dev->hw_ol_features & NETDEV_TX_SCTP_CHECKSUM_OFFLOAD) {
+            conf.txmode.offloads |= DEV_TX_OFFLOAD_SCTP_CKSUM;
+        }
     }
 
     /* Limit configured rss hash functions to only those supported
@@ -1100,12 +1112,10 @@ dpdk_eth_dev_init(struct netdev_dpdk *dev)
     struct rte_ether_addr eth_addr;
     int diag;
     int n_rxq, n_txq;
+    uint32_t tx_tso_offload_capa = DPDK_TX_TSO_OFFLOAD_FLAGS;
     uint32_t rx_chksm_offload_capa = DEV_RX_OFFLOAD_UDP_CKSUM |
                                      DEV_RX_OFFLOAD_TCP_CKSUM |
                                      DEV_RX_OFFLOAD_IPV4_CKSUM;
-    uint32_t tx_tso_offload_capa = DEV_TX_OFFLOAD_TCP_TSO |
-                                   DEV_TX_OFFLOAD_TCP_CKSUM |
-                                   DEV_TX_OFFLOAD_IPV4_CKSUM;
 
     rte_eth_dev_info_get(dev->port_id, &info);
 
@@ -1137,6 +1147,13 @@ dpdk_eth_dev_init(struct netdev_dpdk *dev)
         if ((info.tx_offload_capa & tx_tso_offload_capa)
             == tx_tso_offload_capa) {
             dev->hw_ol_features |= NETDEV_TX_TSO_OFFLOAD;
+            if (info.tx_offload_capa & DEV_TX_OFFLOAD_SCTP_CKSUM) {
+                dev->hw_ol_features |= NETDEV_TX_SCTP_CHECKSUM_OFFLOAD;
+            } else {
+                VLOG_WARN("%s: Tx SCTP checksum offload is not supported, "
+                          "SCTP packets sent to this device will be dropped",
+                          netdev_get_name(&dev->up));
+            }
         } else {
             VLOG_WARN("%s: Tx TSO offload is not supported.",
                       netdev_get_name(&dev->up));
@@ -5110,7 +5127,11 @@ netdev_dpdk_reconfigure(struct netdev *netdev)
     if (dev->hw_ol_features & NETDEV_TX_TSO_OFFLOAD) {
         netdev->ol_flags |= NETDEV_TX_OFFLOAD_TCP_TSO;
         netdev->ol_flags |= NETDEV_TX_OFFLOAD_TCP_CKSUM;
+        netdev->ol_flags |= NETDEV_TX_OFFLOAD_UDP_CKSUM;
         netdev->ol_flags |= NETDEV_TX_OFFLOAD_IPV4_CKSUM;
+        if (dev->hw_ol_features & NETDEV_TX_SCTP_CHECKSUM_OFFLOAD) {
+            netdev->ol_flags |= NETDEV_TX_OFFLOAD_SCTP_CKSUM;
+        }
     }
 
     dev->tx_q = netdev_dpdk_alloc_txq(netdev->n_txq);
@@ -5186,6 +5207,7 @@ netdev_dpdk_vhost_client_reconfigure(struct netdev *netdev)
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
     int err;
     uint64_t vhost_flags = 0;
+    uint64_t vhost_unsup_flags;
     bool zc_enabled;
 
     ovs_mutex_lock(&dev->mutex);
@@ -5251,17 +5273,24 @@ netdev_dpdk_vhost_client_reconfigure(struct netdev *netdev)
         if (userspace_tso_enabled()) {
             netdev->ol_flags |= NETDEV_TX_OFFLOAD_TCP_TSO;
             netdev->ol_flags |= NETDEV_TX_OFFLOAD_TCP_CKSUM;
+            netdev->ol_flags |= NETDEV_TX_OFFLOAD_UDP_CKSUM;
+            netdev->ol_flags |= NETDEV_TX_OFFLOAD_SCTP_CKSUM;
             netdev->ol_flags |= NETDEV_TX_OFFLOAD_IPV4_CKSUM;
+            vhost_unsup_flags = 1ULL << VIRTIO_NET_F_HOST_ECN
+                                | 1ULL << VIRTIO_NET_F_HOST_UFO;
         } else {
-            err = rte_vhost_driver_disable_features(dev->vhost_id,
-                                        1ULL << VIRTIO_NET_F_HOST_TSO4
-                                        | 1ULL << VIRTIO_NET_F_HOST_TSO6
-                                        | 1ULL << VIRTIO_NET_F_CSUM);
-            if (err) {
-                VLOG_ERR("rte_vhost_driver_disable_features failed for "
-                         "vhost user client port: %s\n", dev->up.name);
-                goto unlock;
-            }
+            /* This disables checksum offloading and all the features
+             * that depends on it (TSO, UFO, ECN) according to virtio
+             * specification. */
+            vhost_unsup_flags = 1ULL << VIRTIO_NET_F_CSUM;
+        }
+
+        err = rte_vhost_driver_disable_features(dev->vhost_id,
+                                                vhost_unsup_flags);
+        if (err) {
+            VLOG_ERR("rte_vhost_driver_disable_features failed for "
+                     "vhost user client port: %s\n", dev->up.name);
+            goto unlock;
         }
 
         err = rte_vhost_driver_start(dev->vhost_id);
