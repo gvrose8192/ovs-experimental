@@ -184,10 +184,35 @@ send_backtrace_to_monitor(void) {
         unw_get_reg(&cursor, UNW_REG_IP, &unw_bt[dep].ip);
         unw_get_proc_name(&cursor, unw_bt[dep].func, UNW_MAX_FUNCN,
                           &unw_bt[dep].offset);
-       dep++;
+        dep++;
     }
 
-    ignore(write(daemonize_fd, unw_bt, dep * sizeof(struct unw_backtrace)));
+    if (monitor) {
+        ignore(write(daemonize_fd, unw_bt,
+                     dep * sizeof(struct unw_backtrace)));
+    } else {
+        /* Since there is no monitor daemon running, write backtrace
+         * in current process.  This is not asyn-signal-safe due to
+         * use of snprintf().
+         */
+        char str[] = "SIGSEGV detected, backtrace:\n";
+
+        if (vlog_get_fd() < 0) {
+            return;
+        }
+
+        ignore(write(vlog_get_fd(), str, strlen(str)));
+
+        for (int i = 0; i < dep; i++) {
+            char line[64];
+
+            snprintf(line, 64, "0x%016"PRIxPTR" <%s+0x%"PRIxPTR">\n",
+                     unw_bt[i].ip,
+                     unw_bt[i].func,
+                     unw_bt[i].offset);
+            ignore(write(vlog_get_fd(), line, strlen(line)));
+        }
+    }
 }
 #else
 static inline void
