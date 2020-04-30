@@ -60,6 +60,7 @@ Andy Zhou                          azhou@ovn.org
 Ankur Sharma                       ankursharma@vmware.com
 Anoob Soman                        anoob.soman@citrix.com
 Ansis Atteka                       aatteka@vmware.com
+Anton Ivanov                       anton.ivanov@cambridgegreys.com
 Antonio Fischetti                  antonio.fischetti@intel.com
 Anupam Chanda
 Ariel Tubaltsev                    atubaltsev@vmware.com
@@ -193,6 +194,7 @@ Jeremy Stribling
 Jeroen van Bemmel                  jvb127@gmail.com
 Jesse Gross                        jesse@kernel.org
 Jian Li                            lijian@ooclab.com
+Jiang Lidong                       jianglidong3@jd.com
 Jianbo Liu                         jianbol@mellanox.com
 Jing Ai                            jinga@google.com
 Jiri Benc                          jbenc@redhat.com
