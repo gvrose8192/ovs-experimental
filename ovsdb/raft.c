@@ -938,6 +938,7 @@ raft_add_conn(struct raft *raft, struct jsonrpc_session *js,
                                               &conn->sid);
     conn->incoming = incoming;
     conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
+    jsonrpc_session_set_probe_interval(js, 0);
 }
 
 /* Starts the local server in an existing Raft cluster, using the local copy of
@@ -4163,9 +4164,7 @@ raft_handle_execute_command_request__(
     cmd->sid = rq->common.sid;
 
     enum raft_command_status status = cmd->status;
-    if (status != RAFT_CMD_INCOMPLETE) {
-        raft_command_unref(cmd);
-    }
+    raft_command_unref(cmd);
     return status;
 }
 
