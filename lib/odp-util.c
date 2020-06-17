@@ -6125,7 +6125,8 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
 
     nl_msg_put_u32(buf, OVS_KEY_ATTR_PRIORITY, data->skb_priority);
 
-    if (flow_tnl_dst_is_set(&flow->tunnel) || export_mask) {
+    if (flow_tnl_dst_is_set(&flow->tunnel) ||
+        flow_tnl_src_is_set(&flow->tunnel) || export_mask) {
         tun_key_to_attr(buf, &data->tunnel, &parms->flow->tunnel,
                         parms->key_buf, NULL);
     }
@@ -6391,6 +6392,10 @@ odp_key_from_dp_packet(struct ofpbuf *buf, const struct dp_packet *packet)
     const struct pkt_metadata *md = &packet->md;
 
     nl_msg_put_u32(buf, OVS_KEY_ATTR_PRIORITY, md->skb_priority);
+
+    if (md->dp_hash) {
+        nl_msg_put_u32(buf, OVS_KEY_ATTR_DP_HASH, md->dp_hash);
+    }
 
     if (flow_tnl_dst_is_set(&md->tunnel)) {
         tun_key_to_attr(buf, &md->tunnel, &md->tunnel, NULL, NULL);
@@ -7992,7 +7997,8 @@ get_arp_key(const struct flow *flow, struct ovs_key_arp *arp)
 
     arp->arp_sip = flow->nw_src;
     arp->arp_tip = flow->nw_dst;
-    arp->arp_op = htons(flow->nw_proto);
+    arp->arp_op = flow->nw_proto == UINT8_MAX ?
+                  OVS_BE16_MAX : htons(flow->nw_proto);
     arp->arp_sha = flow->arp_sha;
     arp->arp_tha = flow->arp_tha;
 }

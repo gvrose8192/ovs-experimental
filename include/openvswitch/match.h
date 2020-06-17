@@ -105,6 +105,9 @@ void match_set_tun_flags(struct match *match, uint16_t flags);
 void match_set_tun_flags_masked(struct match *match, uint16_t flags, uint16_t mask);
 void match_set_tun_tp_dst(struct match *match, ovs_be16 tp_dst);
 void match_set_tun_tp_dst_masked(struct match *match, ovs_be16 port, ovs_be16 mask);
+void match_set_tun_tp_src(struct match *match, ovs_be16 tp_src);
+void match_set_tun_tp_src_masked(struct match *match,
+                                 ovs_be16 port, ovs_be16 mask);
 void match_set_tun_gbp_id_masked(struct match *match, ovs_be16 gbp_id, ovs_be16 mask);
 void match_set_tun_gbp_id(struct match *match, ovs_be16 gbp_id);
 void match_set_tun_gbp_flags_masked(struct match *match, uint8_t flags, uint8_t mask);
@@ -194,6 +197,8 @@ void match_set_tp_dst_masked(struct match *, ovs_be16 port, ovs_be16 mask);
 void match_set_tcp_flags(struct match *, ovs_be16);
 void match_set_tcp_flags_masked(struct match *, ovs_be16 flags, ovs_be16 mask);
 void match_set_nw_proto(struct match *, uint8_t);
+void match_set_nw_proto_masked(struct match *match,
+                               const uint8_t nw_proto, const uint8_t mask);
 void match_set_nw_src(struct match *, ovs_be32);
 void match_set_nw_src_masked(struct match *, ovs_be32 ip, ovs_be32 mask);
 void match_set_nw_dst(struct match *, ovs_be32);
@@ -207,6 +212,9 @@ void match_set_nw_frag(struct match *, uint8_t nw_frag);
 void match_set_nw_frag_masked(struct match *, uint8_t nw_frag, uint8_t mask);
 void match_set_icmp_type(struct match *, uint8_t);
 void match_set_icmp_code(struct match *, uint8_t);
+void match_set_arp_opcode_masked(struct match *match,
+                                 const uint8_t opcode,
+                                 const uint8_t mask);
 void match_set_arp_sha(struct match *, const struct eth_addr);
 void match_set_arp_sha_masked(struct match *,
                               const struct eth_addr arp_sha,
@@ -215,6 +223,12 @@ void match_set_arp_tha(struct match *, const struct eth_addr);
 void match_set_arp_tha_masked(struct match *,
                               const struct eth_addr arp_tha,
                               const struct eth_addr mask);
+void match_set_arp_spa_masked(struct match *match,
+                              const ovs_be32 arp_spa,
+                              const ovs_be32 mask);
+void match_set_arp_tpa_masked(struct match *match,
+                              const ovs_be32 arp_tpa,
+                              const ovs_be32 mask);
 void match_set_ipv6_src(struct match *, const struct in6_addr *);
 void match_set_ipv6_src_masked(struct match *, const struct in6_addr *,
                                const struct in6_addr *);

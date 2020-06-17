@@ -51,9 +51,14 @@
 #define TCM_IFINDEX_MAGIC_BLOCK (0xFFFFFFFFU)
 #endif
 
-#if TCA_MAX < 14
+#ifndef TCA_DUMP_FLAGS_TERSE
+#define TCA_DUMP_FLAGS_TERSE (1 << 0)
+#endif
+
+#if TCA_MAX < 15
 #define TCA_CHAIN 11
 #define TCA_INGRESS_BLOCK 13
+#define TCA_DUMP_FLAGS 15
 #endif
 
 VLOG_DEFINE_THIS_MODULE(tc);
@@ -313,6 +318,24 @@ static const struct nl_policy tca_flower_policy[] = {
                                       .min_len = ETH_ALEN,
                                       .optional = true, },
     [TCA_FLOWER_KEY_ETH_TYPE] = { .type = NL_A_U16, .optional = false, },
+    [TCA_FLOWER_KEY_ARP_SIP] = { .type = NL_A_U32, .optional = true, },
+    [TCA_FLOWER_KEY_ARP_TIP] = { .type = NL_A_U32, .optional = true, },
+    [TCA_FLOWER_KEY_ARP_SHA] = { .type = NL_A_UNSPEC,
+                                 .min_len = ETH_ALEN,
+                                 .optional = true, },
+    [TCA_FLOWER_KEY_ARP_THA] = { .type = NL_A_UNSPEC,
+                                 .min_len = ETH_ALEN,
+                                 .optional = true, },
+    [TCA_FLOWER_KEY_ARP_OP] = { .type = NL_A_U8, .optional = true, },
+    [TCA_FLOWER_KEY_ARP_SIP_MASK] = { .type = NL_A_U32, .optional = true, },
+    [TCA_FLOWER_KEY_ARP_TIP_MASK] = { .type = NL_A_U32, .optional = true, },
+    [TCA_FLOWER_KEY_ARP_SHA_MASK] = { .type = NL_A_UNSPEC,
+                                      .min_len = ETH_ALEN,
+                                      .optional = true, },
+    [TCA_FLOWER_KEY_ARP_THA_MASK] = { .type = NL_A_UNSPEC,
+                                      .min_len = ETH_ALEN,
+                                      .optional = true, },
+    [TCA_FLOWER_KEY_ARP_OP_MASK] = { .type = NL_A_U8, .optional = true, },
     [TCA_FLOWER_FLAGS] = { .type = NL_A_U32, .optional = false, },
     [TCA_FLOWER_ACT] = { .type = NL_A_NESTED, .optional = false, },
     [TCA_FLOWER_KEY_IP_PROTO] = { .type = NL_A_U8, .optional = true, },
@@ -372,6 +395,12 @@ static const struct nl_policy tca_flower_policy[] = {
                                            .optional = true, },
     [TCA_FLOWER_KEY_ENC_UDP_DST_PORT] = { .type = NL_A_U16,
                                           .optional = true, },
+    [TCA_FLOWER_KEY_ENC_UDP_SRC_PORT] = { .type = NL_A_U16,
+                                          .optional = true, },
+    [TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK] = { .type = NL_A_U16,
+                                               .optional = true, },
+    [TCA_FLOWER_KEY_ENC_UDP_SRC_PORT_MASK] = { .type = NL_A_U16,
+                                               .optional = true, },
     [TCA_FLOWER_KEY_FLAGS] = { .type = NL_A_BE32, .optional = true, },
     [TCA_FLOWER_KEY_FLAGS_MASK] = { .type = NL_A_BE32, .optional = true, },
     [TCA_FLOWER_KEY_IP_TTL] = { .type = NL_A_U8,
@@ -410,6 +439,50 @@ static const struct nl_policy tca_flower_policy[] = {
     [TCA_FLOWER_KEY_CT_LABELS_MASK] = { .type = NL_A_U128,
                                         .optional = true, },
 };
+
+static const struct nl_policy tca_flower_terse_policy[] = {
+    [TCA_FLOWER_FLAGS] = { .type = NL_A_U32, .optional = false, },
+    [TCA_FLOWER_ACT] = { .type = NL_A_NESTED, .optional = false, },
+};
+
+static void
+nl_parse_flower_arp(struct nlattr **attrs, struct tc_flower *flower)
+{
+    const struct eth_addr *eth;
+
+    if (attrs[TCA_FLOWER_KEY_ARP_SIP_MASK]) {
+        flower->key.arp.spa =
+            nl_attr_get_be32(attrs[TCA_FLOWER_KEY_ARP_SIP]);
+        flower->mask.arp.spa =
+            nl_attr_get_be32(attrs[TCA_FLOWER_KEY_ARP_SIP_MASK]);
+    }
+    if (attrs[TCA_FLOWER_KEY_ARP_TIP_MASK]) {
+        flower->key.arp.tpa =
+            nl_attr_get_be32(attrs[TCA_FLOWER_KEY_ARP_TIP]);
+        flower->mask.arp.tpa =
+            nl_attr_get_be32(attrs[TCA_FLOWER_KEY_ARP_TIP_MASK]);
+    }
+    if (attrs[TCA_FLOWER_KEY_ARP_SHA_MASK]) {
+        eth = nl_attr_get_unspec(attrs[TCA_FLOWER_KEY_ARP_SHA], ETH_ALEN);
+        memcpy(&flower->key.arp.sha, eth, sizeof flower->key.arp.sha);
+
+        eth = nl_attr_get_unspec(attrs[TCA_FLOWER_KEY_ARP_SHA_MASK], ETH_ALEN);
+        memcpy(&flower->mask.arp.sha, eth, sizeof flower->mask.arp.sha);
+    }
+    if (attrs[TCA_FLOWER_KEY_ARP_THA_MASK]) {
+        eth = nl_attr_get_unspec(attrs[TCA_FLOWER_KEY_ARP_THA], ETH_ALEN);
+        memcpy(&flower->key.arp.tha, eth, sizeof flower->key.arp.tha);
+
+        eth = nl_attr_get_unspec(attrs[TCA_FLOWER_KEY_ARP_THA_MASK], ETH_ALEN);
+        memcpy(&flower->mask.arp.tha, eth, sizeof flower->mask.arp.tha);
+    }
+    if (attrs[TCA_FLOWER_KEY_ARP_OP_MASK]) {
+        flower->key.arp.opcode =
+            nl_attr_get_u8(attrs[TCA_FLOWER_KEY_ARP_OP]);
+        flower->mask.arp.opcode =
+            nl_attr_get_u8(attrs[TCA_FLOWER_KEY_ARP_OP_MASK]);
+    }
+}
 
 static void
 nl_parse_flower_eth(struct nlattr **attrs, struct tc_flower *flower)
@@ -650,22 +723,38 @@ nl_parse_flower_tunnel(struct nlattr **attrs, struct tc_flower *flower)
         flower->mask.tunnel.id = OVS_BE64_MAX;
     }
     if (attrs[TCA_FLOWER_KEY_ENC_IPV4_SRC_MASK]) {
+        flower->mask.tunnel.ipv4.ipv4_src =
+            nl_attr_get_be32(attrs[TCA_FLOWER_KEY_ENC_IPV4_SRC_MASK]);
         flower->key.tunnel.ipv4.ipv4_src =
             nl_attr_get_be32(attrs[TCA_FLOWER_KEY_ENC_IPV4_SRC]);
     }
     if (attrs[TCA_FLOWER_KEY_ENC_IPV4_DST_MASK]) {
+        flower->mask.tunnel.ipv4.ipv4_dst =
+            nl_attr_get_be32(attrs[TCA_FLOWER_KEY_ENC_IPV4_DST_MASK]);
         flower->key.tunnel.ipv4.ipv4_dst =
             nl_attr_get_be32(attrs[TCA_FLOWER_KEY_ENC_IPV4_DST]);
     }
     if (attrs[TCA_FLOWER_KEY_ENC_IPV6_SRC_MASK]) {
+        flower->mask.tunnel.ipv6.ipv6_src =
+            nl_attr_get_in6_addr(attrs[TCA_FLOWER_KEY_ENC_IPV6_SRC_MASK]);
         flower->key.tunnel.ipv6.ipv6_src =
             nl_attr_get_in6_addr(attrs[TCA_FLOWER_KEY_ENC_IPV6_SRC]);
     }
     if (attrs[TCA_FLOWER_KEY_ENC_IPV6_DST_MASK]) {
+        flower->mask.tunnel.ipv6.ipv6_dst =
+            nl_attr_get_in6_addr(attrs[TCA_FLOWER_KEY_ENC_IPV6_DST_MASK]);
         flower->key.tunnel.ipv6.ipv6_dst =
             nl_attr_get_in6_addr(attrs[TCA_FLOWER_KEY_ENC_IPV6_DST]);
     }
-    if (attrs[TCA_FLOWER_KEY_ENC_UDP_DST_PORT]) {
+    if (attrs[TCA_FLOWER_KEY_ENC_UDP_SRC_PORT_MASK]) {
+        flower->mask.tunnel.tp_src =
+            nl_attr_get_be16(attrs[TCA_FLOWER_KEY_ENC_UDP_SRC_PORT_MASK]);
+        flower->key.tunnel.tp_src =
+            nl_attr_get_be16(attrs[TCA_FLOWER_KEY_ENC_UDP_SRC_PORT]);
+    }
+    if (attrs[TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK]) {
+        flower->mask.tunnel.tp_dst =
+            nl_attr_get_be16(attrs[TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK]);
         flower->key.tunnel.tp_dst =
             nl_attr_get_be16(attrs[TCA_FLOWER_KEY_ENC_UDP_DST_PORT]);
     }
@@ -1573,7 +1662,7 @@ nl_parse_act_csum(struct nlattr *options, struct tc_flower *flower)
 static const struct nl_policy act_policy[] = {
     [TCA_ACT_KIND] = { .type = NL_A_STRING, .optional = false, },
     [TCA_ACT_COOKIE] = { .type = NL_A_UNSPEC, .optional = true, },
-    [TCA_ACT_OPTIONS] = { .type = NL_A_NESTED, .optional = false, },
+    [TCA_ACT_OPTIONS] = { .type = NL_A_NESTED, .optional = true, },
     [TCA_ACT_STATS] = { .type = NL_A_NESTED, .optional = false, },
 };
 
@@ -1584,7 +1673,8 @@ static const struct nl_policy stats_policy[] = {
 };
 
 static int
-nl_parse_single_action(struct nlattr *action, struct tc_flower *flower)
+nl_parse_single_action(struct nlattr *action, struct tc_flower *flower,
+                       bool terse)
 {
     struct nlattr *act_options;
     struct nlattr *act_stats;
@@ -1597,7 +1687,8 @@ nl_parse_single_action(struct nlattr *action, struct tc_flower *flower)
     int err = 0;
 
     if (!nl_parse_nested(action, act_policy, action_attrs,
-                         ARRAY_SIZE(act_policy))) {
+                         ARRAY_SIZE(act_policy)) ||
+        (!terse && !action_attrs[TCA_ACT_OPTIONS])) {
         VLOG_ERR_RL(&error_rl, "failed to parse single action options");
         return EPROTO;
     }
@@ -1606,7 +1697,9 @@ nl_parse_single_action(struct nlattr *action, struct tc_flower *flower)
     act_options = action_attrs[TCA_ACT_OPTIONS];
     act_cookie = action_attrs[TCA_ACT_COOKIE];
 
-    if (!strcmp(act_kind, "gact")) {
+    if (terse) {
+        /* Terse dump doesn't provide act options attribute. */
+    } else if (!strcmp(act_kind, "gact")) {
         err = nl_parse_act_gact(act_options, flower);
     } else if (!strcmp(act_kind, "mirred")) {
         err = nl_parse_act_mirred(act_options, flower);
@@ -1656,7 +1749,8 @@ nl_parse_single_action(struct nlattr *action, struct tc_flower *flower)
 #define TCA_ACT_MIN_PRIO 1
 
 static int
-nl_parse_flower_actions(struct nlattr **attrs, struct tc_flower *flower)
+nl_parse_flower_actions(struct nlattr **attrs, struct tc_flower *flower,
+                        bool terse)
 {
     const struct nlattr *actions = attrs[TCA_FLOWER_ACT];
     static struct nl_policy actions_orders_policy[TCA_ACT_MAX_NUM + 1] = {};
@@ -1682,7 +1776,7 @@ nl_parse_flower_actions(struct nlattr **attrs, struct tc_flower *flower)
                 VLOG_DBG_RL(&error_rl, "Can only support %d actions", TCA_ACT_MAX_NUM);
                 return EOPNOTSUPP;
             }
-            err = nl_parse_single_action(actions_orders[i], flower);
+            err = nl_parse_single_action(actions_orders[i], flower, terse);
 
             if (err) {
                 return err;
@@ -1701,10 +1795,20 @@ nl_parse_flower_actions(struct nlattr **attrs, struct tc_flower *flower)
 }
 
 static int
-nl_parse_flower_options(struct nlattr *nl_options, struct tc_flower *flower)
+nl_parse_flower_options(struct nlattr *nl_options, struct tc_flower *flower,
+                        bool terse)
 {
     struct nlattr *attrs[ARRAY_SIZE(tca_flower_policy)];
     int err;
+
+    if (terse) {
+        if (!nl_parse_nested(nl_options, tca_flower_terse_policy,
+                             attrs, ARRAY_SIZE(tca_flower_terse_policy))) {
+            VLOG_ERR_RL(&error_rl, "failed to parse flower classifier terse options");
+            return EPROTO;
+        }
+        goto skip_flower_opts;
+    }
 
     if (!nl_parse_nested(nl_options, tca_flower_policy,
                          attrs, ARRAY_SIZE(tca_flower_policy))) {
@@ -1713,6 +1817,7 @@ nl_parse_flower_options(struct nlattr *nl_options, struct tc_flower *flower)
     }
 
     nl_parse_flower_eth(attrs, flower);
+    nl_parse_flower_arp(attrs, flower);
     nl_parse_flower_mpls(attrs, flower);
     nl_parse_flower_vlan(attrs, flower);
     nl_parse_flower_ip(attrs, flower);
@@ -1721,13 +1826,14 @@ nl_parse_flower_options(struct nlattr *nl_options, struct tc_flower *flower)
         return err;
     }
 
+skip_flower_opts:
     nl_parse_flower_flags(attrs, flower);
-    return nl_parse_flower_actions(attrs, flower);
+    return nl_parse_flower_actions(attrs, flower, terse);
 }
 
 int
 parse_netlink_to_tc_flower(struct ofpbuf *reply, struct tcf_id *id,
-                           struct tc_flower *flower)
+                           struct tc_flower *flower, bool terse)
 {
     struct tcmsg *tc;
     struct nlattr *ta[ARRAY_SIZE(tca_policy)];
@@ -1770,15 +1876,22 @@ parse_netlink_to_tc_flower(struct ofpbuf *reply, struct tcf_id *id,
         return EPROTO;
     }
 
-    return nl_parse_flower_options(ta[TCA_OPTIONS], flower);
+    return nl_parse_flower_options(ta[TCA_OPTIONS], flower, terse);
 }
 
 int
-tc_dump_flower_start(struct tcf_id *id, struct nl_dump *dump)
+tc_dump_flower_start(struct tcf_id *id, struct nl_dump *dump, bool terse)
 {
     struct ofpbuf request;
 
     request_from_tcf_id(id, 0, RTM_GETTFILTER, NLM_F_DUMP, &request);
+    if (terse) {
+        struct nla_bitfield32 dump_flags = { TCA_DUMP_FLAGS_TERSE,
+                                             TCA_DUMP_FLAGS_TERSE };
+
+        nl_msg_put_unspec(&request, TCA_DUMP_FLAGS, &dump_flags,
+                          sizeof dump_flags);
+    }
     nl_dump_start(dump, NETLINK_ROUTE, &request);
     ofpbuf_uninit(&request);
 
@@ -1807,7 +1920,7 @@ tc_get_flower(struct tcf_id *id, struct tc_flower *flower)
         return error;
     }
 
-    error = parse_netlink_to_tc_flower(reply, id, flower);
+    error = parse_netlink_to_tc_flower(reply, id, flower, false);
     ofpbuf_delete(reply);
     return error;
 }
@@ -2038,7 +2151,7 @@ nl_msg_put_act_tunnel_key_set(struct ofpbuf *request, bool id_present,
         if (ipv4_dst) {
             nl_msg_put_be32(request, TCA_TUNNEL_KEY_ENC_IPV4_SRC, ipv4_src);
             nl_msg_put_be32(request, TCA_TUNNEL_KEY_ENC_IPV4_DST, ipv4_dst);
-        } else if (!is_all_zeros(ipv6_dst, sizeof *ipv6_dst)) {
+        } else if (ipv6_addr_is_set(ipv6_dst)) {
             nl_msg_put_in6_addr(request, TCA_TUNNEL_KEY_ENC_IPV6_DST,
                                 ipv6_dst);
             nl_msg_put_in6_addr(request, TCA_TUNNEL_KEY_ENC_IPV6_SRC,
@@ -2135,12 +2248,10 @@ nl_msg_put_act_ct(struct ofpbuf *request, struct tc_action *action)
                                     action->ct.range.ipv4.max);
                     }
                 } else if (action->ct.range.ip_family == AF_INET6) {
-                    size_t ipv6_sz = sizeof(action->ct.range.ipv6.max);
 
                     nl_msg_put_in6_addr(request, TCA_CT_NAT_IPV6_MIN,
                                         &action->ct.range.ipv6.min);
-                    if (!is_all_zeros(&action->ct.range.ipv6.max,
-                                      ipv6_sz)) {
+                    if (ipv6_addr_is_set(&action->ct.range.ipv6.max)) {
                         nl_msg_put_in6_addr(request, TCA_CT_NAT_IPV6_MAX,
                                             &action->ct.range.ipv6.max);
                     }
@@ -2594,11 +2705,18 @@ nl_msg_put_flower_tunnel_opts(struct ofpbuf *request, uint16_t type,
 static void
 nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
 {
+    ovs_be32 ipv4_src_mask = flower->mask.tunnel.ipv4.ipv4_src;
+    ovs_be32 ipv4_dst_mask = flower->mask.tunnel.ipv4.ipv4_dst;
     ovs_be32 ipv4_src = flower->key.tunnel.ipv4.ipv4_src;
     ovs_be32 ipv4_dst = flower->key.tunnel.ipv4.ipv4_dst;
+    struct in6_addr *ipv6_src_mask = &flower->mask.tunnel.ipv6.ipv6_src;
+    struct in6_addr *ipv6_dst_mask = &flower->mask.tunnel.ipv6.ipv6_dst;
     struct in6_addr *ipv6_src = &flower->key.tunnel.ipv6.ipv6_src;
     struct in6_addr *ipv6_dst = &flower->key.tunnel.ipv6.ipv6_dst;
+    ovs_be16 tp_dst_mask = flower->mask.tunnel.tp_dst;
+    ovs_be16 tp_src_mask = flower->mask.tunnel.tp_src;
     ovs_be16 tp_dst = flower->key.tunnel.tp_dst;
+    ovs_be16 tp_src = flower->key.tunnel.tp_src;
     ovs_be32 id = be64_to_be32(flower->key.tunnel.id);
     uint8_t tos = flower->key.tunnel.tos;
     uint8_t ttl = flower->key.tunnel.ttl;
@@ -2606,12 +2724,21 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
     uint8_t ttl_mask = flower->mask.tunnel.ttl;
     ovs_be64 id_mask = flower->mask.tunnel.id;
 
-    if (ipv4_dst) {
-        nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_IPV4_SRC, ipv4_src);
+    if (ipv4_dst_mask || ipv4_src_mask) {
+        nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_IPV4_DST_MASK,
+                        ipv4_dst_mask);
+        nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_IPV4_SRC_MASK,
+                        ipv4_src_mask);
         nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_IPV4_DST, ipv4_dst);
-    } else if (!is_all_zeros(ipv6_dst, sizeof *ipv6_dst)) {
-        nl_msg_put_in6_addr(request, TCA_FLOWER_KEY_ENC_IPV6_SRC, ipv6_src);
+        nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_IPV4_SRC, ipv4_src);
+    } else if (ipv6_addr_is_set(ipv6_dst_mask) ||
+               ipv6_addr_is_set(ipv6_src_mask)) {
+        nl_msg_put_in6_addr(request, TCA_FLOWER_KEY_ENC_IPV6_DST_MASK,
+                            ipv6_dst_mask);
+        nl_msg_put_in6_addr(request, TCA_FLOWER_KEY_ENC_IPV6_SRC_MASK,
+                            ipv6_src_mask);
         nl_msg_put_in6_addr(request, TCA_FLOWER_KEY_ENC_IPV6_DST, ipv6_dst);
+        nl_msg_put_in6_addr(request, TCA_FLOWER_KEY_ENC_IPV6_SRC, ipv6_src);
     }
     if (tos_mask) {
         nl_msg_put_u8(request, TCA_FLOWER_KEY_ENC_IP_TOS, tos);
@@ -2621,8 +2748,15 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
         nl_msg_put_u8(request, TCA_FLOWER_KEY_ENC_IP_TTL, ttl);
         nl_msg_put_u8(request, TCA_FLOWER_KEY_ENC_IP_TTL_MASK, ttl_mask);
     }
-    if (tp_dst) {
+    if (tp_dst_mask) {
+        nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK,
+                        tp_dst_mask);
         nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_DST_PORT, tp_dst);
+    }
+    if (tp_src_mask) {
+        nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_SRC_PORT_MASK,
+                        tp_src_mask);
+        nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_SRC_PORT, tp_src);
     }
     if (id_mask) {
         nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_KEY_ID, id);
@@ -2668,6 +2802,14 @@ nl_msg_put_flower_options(struct ofpbuf *request, struct tc_flower *flower)
 
     FLOWER_PUT_MASKED_VALUE(dst_mac, TCA_FLOWER_KEY_ETH_DST);
     FLOWER_PUT_MASKED_VALUE(src_mac, TCA_FLOWER_KEY_ETH_SRC);
+
+    if (host_eth_type == ETH_P_ARP) {
+        FLOWER_PUT_MASKED_VALUE(arp.spa, TCA_FLOWER_KEY_ARP_SIP);
+        FLOWER_PUT_MASKED_VALUE(arp.tpa, TCA_FLOWER_KEY_ARP_TIP);
+        FLOWER_PUT_MASKED_VALUE(arp.sha, TCA_FLOWER_KEY_ARP_SHA);
+        FLOWER_PUT_MASKED_VALUE(arp.tha, TCA_FLOWER_KEY_ARP_THA);
+        FLOWER_PUT_MASKED_VALUE(arp.opcode, TCA_FLOWER_KEY_ARP_OP);
+    }
 
     if (host_eth_type == ETH_P_IP || host_eth_type == ETH_P_IPV6) {
         FLOWER_PUT_MASKED_VALUE(ip_ttl, TCA_FLOWER_KEY_IP_TTL);

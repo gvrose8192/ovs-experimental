@@ -294,6 +294,19 @@ match_set_tun_tp_dst_masked(struct match *match, ovs_be16 port, ovs_be16 mask)
 }
 
 void
+match_set_tun_tp_src(struct match *match, ovs_be16 tp_src)
+{
+    match_set_tun_tp_src_masked(match, tp_src, OVS_BE16_MAX);
+}
+
+void
+match_set_tun_tp_src_masked(struct match *match, ovs_be16 port, ovs_be16 mask)
+{
+    match->wc.masks.tunnel.tp_src = mask;
+    match->flow.tunnel.tp_src = port & mask;
+}
+
+void
 match_set_tun_gbp_id_masked(struct match *match, ovs_be16 gbp_id, ovs_be16 mask)
 {
     match->wc.masks.tunnel.gbp_id = mask;
@@ -928,6 +941,14 @@ match_set_nw_proto(struct match *match, uint8_t nw_proto)
 }
 
 void
+match_set_nw_proto_masked(struct match *match,
+                          const uint8_t nw_proto, const uint8_t mask)
+{
+    match->flow.nw_proto = nw_proto;
+    match->wc.masks.nw_proto = mask;
+}
+
+void
 match_set_nw_src(struct match *match, ovs_be32 nw_src)
 {
     match->flow.nw_src = nw_src;
@@ -1018,6 +1039,30 @@ void
 match_set_icmp_code(struct match *match, uint8_t icmp_code)
 {
     match_set_tp_dst(match, htons(icmp_code));
+}
+
+void
+match_set_arp_opcode_masked(struct match *match,
+                            const uint8_t opcode,
+                            const uint8_t mask)
+{
+    match_set_nw_proto_masked(match, opcode, mask);
+}
+
+void
+match_set_arp_spa_masked(struct match *match,
+                         const ovs_be32 arp_spa,
+                         const ovs_be32 mask)
+{
+    match_set_nw_src_masked(match, arp_spa, mask);
+}
+
+void
+match_set_arp_tpa_masked(struct match *match,
+                         const ovs_be32 arp_tpa,
+                         const ovs_be32 mask)
+{
+    match_set_nw_dst_masked(match, arp_tpa, mask);
 }
 
 void

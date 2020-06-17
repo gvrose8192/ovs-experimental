@@ -691,6 +691,7 @@ dpif_netlink_set_features(struct dpif *dpif_, uint32_t new_features)
 
     dpif_netlink_dp_init(&request);
     request.cmd = OVS_DP_CMD_SET;
+    request.name = dpif_->base_name;
     request.dp_ifindex = dpif->dp_ifindex;
     request.user_features = dpif->user_features | new_features;
 
@@ -1445,7 +1446,8 @@ start_netdev_dump(const struct dpif *dpif_,
     dump->netdev_current_dump = 0;
     dump->netdev_dumps
         = netdev_ports_flow_dump_create(dpif_->dpif_class,
-                                        &dump->netdev_dumps_num);
+                                        &dump->netdev_dumps_num,
+                                        dump->up.terse);
     ovs_mutex_unlock(&dump->netdev_lock);
 }
 
@@ -1640,41 +1642,42 @@ dpif_netlink_netdev_match_to_dpif_flow(struct match *match,
                                        struct dpif_flow_attrs *attrs,
                                        ovs_u128 *ufid,
                                        struct dpif_flow *flow,
-                                       bool terse OVS_UNUSED)
+                                       bool terse)
 {
-
-    struct odp_flow_key_parms odp_parms = {
-        .flow = &match->flow,
-        .mask = &match->wc.masks,
-        .support = {
-            .max_vlan_headers = 2,
-            .recirc = true,
-            .ct_state = true,
-            .ct_zone = true,
-            .ct_mark = true,
-            .ct_label = true,
-        },
-    };
-    size_t offset;
-
     memset(flow, 0, sizeof *flow);
 
-    /* Key */
-    offset = key_buf->size;
-    flow->key = ofpbuf_tail(key_buf);
-    odp_flow_key_from_flow(&odp_parms, key_buf);
-    flow->key_len = key_buf->size - offset;
+    if (!terse) {
+        struct odp_flow_key_parms odp_parms = {
+            .flow = &match->flow,
+            .mask = &match->wc.masks,
+            .support = {
+                .max_vlan_headers = 2,
+                .recirc = true,
+                .ct_state = true,
+                .ct_zone = true,
+                .ct_mark = true,
+                .ct_label = true,
+            },
+        };
+        size_t offset;
 
-    /* Mask */
-    offset = mask_buf->size;
-    flow->mask = ofpbuf_tail(mask_buf);
-    odp_parms.key_buf = key_buf;
-    odp_flow_key_from_mask(&odp_parms, mask_buf);
-    flow->mask_len = mask_buf->size - offset;
+        /* Key */
+        offset = key_buf->size;
+        flow->key = ofpbuf_tail(key_buf);
+        odp_flow_key_from_flow(&odp_parms, key_buf);
+        flow->key_len = key_buf->size - offset;
 
-    /* Actions */
-    flow->actions = nl_attr_get(actions);
-    flow->actions_len = nl_attr_get_size(actions);
+        /* Mask */
+        offset = mask_buf->size;
+        flow->mask = ofpbuf_tail(mask_buf);
+        odp_parms.key_buf = key_buf;
+        odp_flow_key_from_mask(&odp_parms, mask_buf);
+        flow->mask_len = mask_buf->size - offset;
+
+        /* Actions */
+        flow->actions = nl_attr_get(actions);
+        flow->actions_len = nl_attr_get_size(actions);
+    }
 
     /* Stats */
     memcpy(&flow->stats, stats, sizeof *stats);
@@ -2232,11 +2235,54 @@ dpif_netlink_operate_chunks(struct dpif_netlink *dpif, struct dpif_op **ops,
 }
 
 static void
+dpif_netlink_try_update_ufid__(struct dpif_op *op, ovs_u128 *ufid)
+{
+    switch (op->type) {
+    case DPIF_OP_FLOW_PUT:
+        if (!op->flow_put.ufid) {
+            odp_flow_key_hash(op->flow_put.key, op->flow_put.key_len,
+                              ufid);
+            op->flow_put.ufid = ufid;
+        }
+        break;
+    case DPIF_OP_FLOW_DEL:
+        if (!op->flow_del.ufid) {
+            odp_flow_key_hash(op->flow_del.key, op->flow_del.key_len,
+                              ufid);
+            op->flow_del.ufid = ufid;
+        }
+        break;
+    case DPIF_OP_FLOW_GET:
+        if (!op->flow_get.ufid) {
+            odp_flow_key_hash(op->flow_get.key, op->flow_get.key_len,
+                              ufid);
+            op->flow_get.ufid = ufid;
+        }
+        break;
+    case DPIF_OP_EXECUTE:
+    default:
+        break;
+    }
+}
+
+static void
+dpif_netlink_try_update_ufid(struct dpif_op **ops, ovs_u128 *ufid,
+                             size_t n_ops)
+{
+    int i;
+
+    for (i = 0; i < n_ops; i++) {
+        dpif_netlink_try_update_ufid__(ops[i], &ufid[i]);
+    }
+}
+
+static void
 dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops,
                      enum dpif_offload_type offload_type)
 {
     struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
     struct dpif_op *new_ops[OPERATE_MAX_OPS];
+    ovs_u128 ufids[OPERATE_MAX_OPS];
     int count = 0;
     int i = 0;
     int err = 0;
@@ -2245,6 +2291,8 @@ dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops,
         VLOG_DBG("Invalid offload_type: %d", offload_type);
         return;
     }
+
+    dpif_netlink_try_update_ufid(ops, ufids, n_ops);
 
     if (offload_type != DPIF_OFFLOAD_NEVER && netdev_is_flow_api_enabled()) {
         while (n_ops > 0) {
