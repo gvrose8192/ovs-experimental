@@ -33,6 +33,7 @@ Name                               Email
 ================================== ===============================================
 Aaron Conole                       aconole@redhat.com
 Aaron Rosen                        arosen@clemson.edu
+Adrian Moreno                      amorenoz@redhat.com
 Alan Pevec                         alan.pevec@redhat.com
 Alessandro Pilotti                 apilotti@cloudbasesolutions.com
 Alexander Duyck                    alexander.h.duyck@redhat.com
@@ -303,6 +304,7 @@ Paul Fazzone                       pfazzone@vmware.com
 Paul Ingram
 Paul-Emmanuel Raoul                skyper@skyplabs.net
 Pavithra Ramesh                    paramesh@vmware.com
+Peng He                            hepeng.0320@bytedance.com
 Peter Downs                        padowns@gmail.com
 Philippe Jung                      phil.jung@free.fr
 Pim van den Berg                   pim@nethuis.nl
