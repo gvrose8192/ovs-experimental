@@ -2252,7 +2252,11 @@ dp_netdev_pmd_find_dpcls(struct dp_netdev_pmd_thread *pmd,
 }
 
 #define MAX_FLOW_MARK       (UINT32_MAX - 1)
-#define INVALID_FLOW_MARK   (UINT32_MAX)
+#define INVALID_FLOW_MARK   0
+/* Zero flow mark is used to indicate the HW to remove the mark. A packet
+ * marked with zero mark is received in SW without a mark at all, so it
+ * cannot be used as a valid mark.
+ */
 
 struct megaflow_to_mark_data {
     const struct cmap_node node;
@@ -2278,7 +2282,7 @@ flow_mark_alloc(void)
 
     if (!flow_mark.pool) {
         /* Haven't initiated yet, do it here */
-        flow_mark.pool = id_pool_create(0, MAX_FLOW_MARK);
+        flow_mark.pool = id_pool_create(1, MAX_FLOW_MARK);
     }
 
     if (id_pool_alloc_id(flow_mark.pool, &mark)) {
@@ -2356,7 +2360,8 @@ mark_to_flow_associate(const uint32_t mark, struct dp_netdev_flow *flow)
                 hash_int(mark, 0));
     flow->mark = mark;
 
-    VLOG_DBG("Associated dp_netdev flow %p with mark %u\n", flow, mark);
+    VLOG_DBG("Associated dp_netdev flow %p with mark %u mega_ufid "UUID_FMT,
+             flow, mark, UUID_ARGS((struct uuid *) &flow->mega_ufid));
 }
 
 static bool
@@ -2378,10 +2383,17 @@ static int
 mark_to_flow_disassociate(struct dp_netdev_pmd_thread *pmd,
                           struct dp_netdev_flow *flow)
 {
-    int ret = 0;
-    uint32_t mark = flow->mark;
+    const char *dpif_type_str = dpif_normalize_type(pmd->dp->class->type);
     struct cmap_node *mark_node = CONST_CAST(struct cmap_node *,
                                              &flow->mark_node);
+    uint32_t mark = flow->mark;
+    int ret = 0;
+
+    /* INVALID_FLOW_MARK may mean that the flow has been disassociated or
+     * never associated. */
+    if (OVS_UNLIKELY(mark == INVALID_FLOW_MARK)) {
+        return EINVAL;
+    }
 
     cmap_remove(&flow_mark.mark_to_flow, mark_node, hash_int(mark, 0));
     flow->mark = INVALID_FLOW_MARK;
@@ -2394,7 +2406,7 @@ mark_to_flow_disassociate(struct dp_netdev_pmd_thread *pmd,
         struct netdev *port;
         odp_port_t in_port = flow->flow.in_port.odp_port;
 
-        port = netdev_ports_get(in_port, pmd->dp->class);
+        port = netdev_ports_get(in_port, dpif_type_str);
         if (port) {
             /* Taking a global 'port_mutex' to fulfill thread safety
              * restrictions for the netdev-offload-dpdk module. */
@@ -2405,7 +2417,8 @@ mark_to_flow_disassociate(struct dp_netdev_pmd_thread *pmd,
         }
 
         flow_mark_free(mark);
-        VLOG_DBG("Freed flow mark %u\n", mark);
+        VLOG_DBG("Freed flow mark %u mega_ufid "UUID_FMT, mark,
+                 UUID_ARGS((struct uuid *) &flow->mega_ufid));
 
         megaflow_to_mark_disassociate(&flow->mega_ufid);
     }
@@ -2501,9 +2514,9 @@ static int
 dp_netdev_flow_offload_put(struct dp_flow_offload_item *offload)
 {
     struct dp_netdev_pmd_thread *pmd = offload->pmd;
-    const struct dpif_class *dpif_class = pmd->dp->class;
     struct dp_netdev_flow *flow = offload->flow;
     odp_port_t in_port = flow->flow.in_port.odp_port;
+    const char *dpif_type_str = dpif_normalize_type(pmd->dp->class->type);
     bool modification = offload->op == DP_NETDEV_FLOW_OFFLOAD_OP_MOD;
     struct offload_info info;
     struct netdev *port;
@@ -2536,12 +2549,12 @@ dp_netdev_flow_offload_put(struct dp_flow_offload_item *offload)
         mark = flow_mark_alloc();
         if (mark == INVALID_FLOW_MARK) {
             VLOG_ERR("Failed to allocate flow mark!\n");
+            return -1;
         }
     }
     info.flow_mark = mark;
-    info.dpif_class = dpif_class;
 
-    port = netdev_ports_get(in_port, pmd->dp->class);
+    port = netdev_ports_get(in_port, dpif_type_str);
     if (!port || netdev_vport_is_vport_class(port->netdev_class)) {
         netdev_close(port);
         goto err_free;
@@ -2612,8 +2625,9 @@ dp_netdev_flow_offload_main(void *data OVS_UNUSED)
             OVS_NOT_REACHED();
         }
 
-        VLOG_DBG("%s to %s netdev flow\n",
-                 ret == 0 ? "succeed" : "failed", op);
+        VLOG_DBG("%s to %s netdev flow "UUID_FMT,
+                 ret == 0 ? "succeed" : "failed", op,
+                 UUID_ARGS((struct uuid *) &offload->flow->mega_ufid));
         dp_netdev_free_flow_offload(offload);
         ovsrcu_quiesce();
     }
@@ -3154,7 +3168,8 @@ dpif_netdev_get_flow_offload_status(const struct dp_netdev *dp,
         return false;
     }
 
-    netdev = netdev_ports_get(netdev_flow->flow.in_port.odp_port, dp->class);
+    netdev = netdev_ports_get(netdev_flow->flow.in_port.odp_port,
+                              dpif_normalize_type(dp->class->type));
     if (!netdev) {
         return false;
     }
@@ -3484,6 +3499,8 @@ dp_netdev_flow_add(struct dp_netdev_pmd_thread *pmd,
 
         ds_put_cstr(&ds, "flow_add: ");
         odp_format_ufid(ufid, &ds);
+        ds_put_cstr(&ds, " mega_");
+        odp_format_ufid(&flow->mega_ufid, &ds);
         ds_put_cstr(&ds, " ");
         odp_flow_format(key_buf.data, key_buf.size,
                         mask_buf.data, mask_buf.size,

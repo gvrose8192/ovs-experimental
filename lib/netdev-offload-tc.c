@@ -1714,7 +1714,8 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
         action = &flower.actions[flower.action_count];
         if (nl_attr_type(nla) == OVS_ACTION_ATTR_OUTPUT) {
             odp_port_t port = nl_attr_get_odp_port(nla);
-            struct netdev *outdev = netdev_ports_get(port, info->dpif_class);
+            struct netdev *outdev = netdev_ports_get(
+                                        port, netdev_get_dpif_type(netdev));
 
             if (!outdev) {
                 VLOG_DBG_RL(&rl, "Can't find netdev for output port %d", port);
@@ -1788,6 +1789,10 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
             action->chain = nl_attr_get_u32(nla);
             flower.action_count++;
             recirc_act = true;
+        } else if (nl_attr_type(nla) == OVS_ACTION_ATTR_DROP) {
+            action->type = TC_ACT_GOTO;
+            action->chain = 0;  /* 0 is reserved and not used by recirc. */
+            flower.action_count++;
         } else {
             VLOG_DBG_RL(&rl, "unsupported put action type: %d",
                         nl_attr_type(nla));
