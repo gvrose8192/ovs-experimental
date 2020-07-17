@@ -192,6 +192,7 @@ Jason Kölker                       jason@koelker.net
 Jason Wessel                       jason.wessel@windriver.com
 Jasper Capel                       jasper@capel.tv
 Jean Tourrilhes                    jt@hpl.hp.com
+Jeff Squyres                       jsquyres@cisco.com
 Jeremy Stribling
 Jeroen van Bemmel                  jvb127@gmail.com
 Jesse Gross                        jesse@kernel.org
@@ -504,6 +505,7 @@ Edwin Chiu                      echiu@vmware.com
 Eivind Bulie Haanaes
 Enas Ahmad                      enas.ahmad@kaust.edu.sa
 Eric Lopez
+Frank Wang (王培辉)             wangpeihui@inspur.com
 Frido Roose                     fr.roose@gmail.com
 Gaetano Catalli                 gaetano.catalli@gmail.com
 Gavin Remaley                   gavin_remaley@selinc.com
