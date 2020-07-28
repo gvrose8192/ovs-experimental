@@ -1,0 +1,157 @@
+# Current version of OVS that this package requires
+%define ovs_version @VERSION@
+%define rhosp_ovs_version 2.11
+
+# Comma-separated (no spaces) e.g. 2.10,2.9 ... of prior fast-datapath
+# openvswitch packages we need to obsolete
+%define obsolete_ovs_versions 2.10
+
+%if 0%{?rhel} > 7
+%define pyprefix python3
+%else
+%define pyprefix python
+%endif
+
+# Lua macro to create a bunch of Obsoletes by splitting up the above
+# definition.
+%{lua:
+function ovs_obsoletes(package)
+  local ovsv = rpm.expand("%ovs_version")
+  print("Obsoletes: "..package.." < "..ovsv.."\n")
+  for s in string.gmatch(rpm.expand("%obsolete_ovs_versions"), "[^,]+") do
+    print("Obsoletes: "..package..s.." < "..ovsv.."\n")
+  end
+end}
+
+Name:		rhosp-openvswitch
+Version:	%{ovs_version}
+Release:	1%{?dist}
+Summary:	Wrapper rpm to allow installing OVS with new versioning schemes
+
+Group:		System Environment/Daemons
+License:	Public domain
+URL:		http://www.openvswitch.org
+BuildArch:  noarch
+
+Requires:	openvswitch = %{ovs_version}-1%{?dist}
+%if 0%{?rhel} == 8
+# RHEL8 still has network-scripts, but they are deprecated;
+# RHEL>8 is unlikely to have them.
+Requires:       network-scripts-openvswitch%{rhosp_ovs_version}
+%endif
+Provides:       openvswitch = %{ovs_version}
+%{lua:ovs_obsoletes("openvswitch")}
+
+%description
+Wrapper rpm for the base openvswitch package
+
+%package -n %{pyprefix}-rhosp-openvswitch
+Summary:    wrapper for python-openvswitch rpm
+License:    Public domain
+Requires:   %{pyprefix}-openvswitch%{rhosp_ovs_version}
+Provides:   %{pyprefix}-openvswitch = %{rhosp_ovs_version}
+%if 0%{?rhel} > 7
+%{lua:ovs_obsoletes("python3-openvswitch")}
+# Just in case / being pedantic ...
+%{lua:ovs_obsoletes("python2-openvswitch")}
+%endif
+# RHEL7 builds didn't have python2-openvswitch
+%{lua:ovs_obsoletes("python-openvswitch")}
+
+%description -n %{pyprefix}-rhosp-openvswitch
+Wrapper rpm for the base %{pyprefix}-openvswitch package
+
+# %package devel
+# Summary:    wrapper for openvswitch-devel rpm
+# License:    Public domain
+# Requires:   openvswitch%{ovs_version}-devel
+# Provides:   openvswitch-devel = %{ovs_version}
+# %{lua:ovs_obsoletes("openvswitch-devel")}
+
+# %description devel
+# Wrapper rpm for the base openvswitch-devel package
+
+%package ovn-central
+Summary:    wrapper for openvswitch-ovn-central rpm
+License:    Public domain
+Requires:   openvswitch%{rhosp_ovs_version}-ovn-central
+Provides:   openvswitch-ovn-central = %{rhosp_ovs_version}
+%{lua:ovs_obsoletes("openvswitch-ovn-central")}
+
+%description ovn-central
+Wrapper rpm for the base openvswitch-ovn-central package
+
+%package ovn-host
+Summary:    wrapper for openvswitch-ovn-host rpm
+License:    Public domain
+Requires:   openvswitch%{rhosp_ovs_version}-ovn-host
+Provides:   openvswitch-ovn-host = %{rhosp_ovs_version}
+%{lua:ovs_obsoletes("openvswitch-ovn-host")}
+
+%description ovn-host
+Wrapper rpm for the base openvswitch-ovn-host package
+
+# %package ovn-vtep
+# Summary:    wrapper for openvswitch-ovn-vtep rpm
+# License:    Public domain
+# Requires:   openvswitch%{rhosp_ovs_version}-ovn-vtep
+# Provides:   openvswitch-ovn-vtep = %{rhosp_ovs_version}
+# %{lua:ovs_obsoletes("openvswitch-ovn-vtep")}
+
+# %description ovn-vtep
+# Wrapper rpm for the base openvswitch-ovn-vtep package
+
+%package ovn-common
+Summary:    wrapper for openvswitch-ovn-common rpm
+License:    Public domain
+Requires:   openvswitch%{rhosp_ovs_version}-ovn-common
+Provides:   openvswitch-ovn-common = %{rhosp_ovs_version}
+%{lua:ovs_obsoletes("openvswitch-ovn-common")}
+
+%description ovn-common
+Wrapper rpm for the base openvswitch-ovn-common package
+
+# %package ovn-docker
+# Summary:    wrapper for openvswitch-ovn-docker rpm
+# License:    Public domain
+# Requires:   openvswitch%{rhosp_ovs_version}-ovn-docker
+# Provides:   openvswitch-ovn-docker = %{rhosp_ovs_version}
+# %{lua:ovs_obsoletes("openvswitch-ovn-docker")}
+
+# %description ovn-docker
+# Wrapper rpm for the base openvswitch-ovn-docker package
+
+# %package test
+# Summary:    wrapper for openvswitch-test rpm
+# License:    Public domain
+# Requires:   openvswitch%{rhosp_ovs_version}-test
+# Provides:   openvswitch-test = %{ovs_version}
+# %{lua:ovs_obsoletes("openvswitch-test")}
+
+# %description test
+# Wrapper rpm for the base openvswitch-test package
+
+%setup
+
+%build
+
+%files
+%files -n %{pyprefix}-rhosp-openvswitch
+# %files devel
+%files ovn-central
+%files ovn-host
+# %files ovn-vtep
+%files ovn-common
+# %files ovn-docker
+# %files test
+
+%changelog
+* Tue Jul 30 2019 Lon Hohberger <lon@redhat.com> - 2.11-0.6
+- Use Obsoletes: lua macro so we can add/remove versions to Obsoletes
+  without rewriting the spec file each time
+
+* Tue Jun 11 2019 Thierry Vignaud <tvignaud@redhat.com> 2.11-0.1.fc29
+- Update for OVS 2.11
+
+* Wed Jul 11 2018 Mike Burns <mburns@redhat.com> - 2.10-0.1
+- initial spec for RHOSP openvswitch wrapper RPMs
