@@ -488,6 +488,11 @@ tnl_port_send(const struct ofport_dpif *ofport, struct flow *flow,
         flow->tunnel.erspan_hwid = cfg->erspan_hwid;
     }
 
+    if (cfg->allow_info_bridge && !flow_tnl_dst_is_set(&flow->tunnel) &&
+        !flow->tunnel.gbp_flags && !flow->tunnel.gbp_id) {
+        flow->tunnel.ipv4_info_bridge = 1;
+    }
+
     if (pre_flow_str) {
         char *post_flow_str = flow_to_string(flow, NULL);
         char *tnl_str = tnl_port_to_string(tnl_port);

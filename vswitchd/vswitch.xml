@@ -2944,6 +2944,15 @@
             </li>
           </ul>
         </column>
+
+        <column name="options" key="allow_info_bridge"
+                type='{"type": "boolean"}'>
+          Optional. Only in remote_ip=flow mode can be enabled. If enabled,
+          the tunnel dst is not set in flow. It will ignore all other
+          parameters except VNI. It makes the packet forward through the fdb
+          of vxlan_sys_x device. Default is disable; set to <code>true</code>
+          to enable.
+        </column>
       </group>
 
       <group title="Tunnel Options: gre only">
