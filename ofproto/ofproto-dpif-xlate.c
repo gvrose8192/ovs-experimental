@@ -4172,7 +4172,8 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
             goto out; /* restore flow_nw_tos */
         }
         dst = flow_tnl_dst(&flow->tunnel);
-        if (ipv6_addr_equals(&dst, &ctx->orig_tunnel_ipv6_dst)) {
+        if (!flow_tnl_ipv4_info_bridge(&flow->tunnel) &&
+            ipv6_addr_equals(&dst, &ctx->orig_tunnel_ipv6_dst)) {
             xlate_report(ctx, OFT_WARN, "Not tunneling to our own address");
             goto out; /* restore flow_nw_tos */
         }

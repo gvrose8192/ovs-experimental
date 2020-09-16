@@ -139,6 +139,8 @@ struct netdev_tunnel_config {
     bool erspan_idx_flow;
     bool erspan_dir_flow;
     bool erspan_hwid_flow;
+
+    bool allow_info_bridge;
 };
 
 void netdev_run(void);
