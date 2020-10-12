@@ -76,6 +76,9 @@ The following explains the steps in some detail.
   `WiX Toolset <https://wixtoolset.org/>`__ and also be able to build the
   kernel module.
 
+  We recommend using the latest Visual Studio version together with the latest
+  WDK installed.
+
   It is important to get the Visual Studio related environment variables and to
   have the $PATH inside the bash to point to the proper compiler and linker.
   One easy way to achieve this for VS2013 is to get into the "VS2013 x86 Native
@@ -95,13 +98,13 @@ The following explains the steps in some detail.
   Visual studio's linker is used. You should also see a 'which sort' report
   ``/bin/sort.exe``.
 
-- pthreads-win32
+- PThreads4W
 
-  For pthread support, install the library, dll and includes of pthreads-win32
+  For pthread support, install the library, dll and includes of PThreads4W
   project from `sourceware
-  <ftp://sourceware.org/pub/pthreads-win32/prebuilt-dll-2-9-1-release>`__ to a
-  directory (e.g.: ``C:/pthread``). You should add the pthread-win32's dll path
-  (e.g.: ``C:\pthread\dll\x86``) to the Windows' PATH environment variable.
+  <https://sourceforge.net/projects/pthreads4w/>`__ to a directory
+  (e.g.: ``C:/pthread``). You should add the PThreads4W's dll path
+  (e.g.: ``C:\pthread\bin``) to the Windows' PATH environment variable.
 
 - OpenSSL
 
