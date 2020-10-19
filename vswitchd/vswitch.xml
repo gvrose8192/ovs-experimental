@@ -1072,7 +1072,7 @@
               Drop all unencrypted tunneled packets in which the
               least-significant bit of <code>skb_mark</code> is 0.  This would
               be a useful policy if no unencrypted tunneled traffic should exit
-              the system without being specially whitelisted by setting
+              the system without being specially permitted by setting
               <code>skb_mark</code> to 1.
             </dd>
 
@@ -2008,7 +2008,10 @@
         If a slave interface with this name exists in the bond and
         is up, it will be made active.  Relevant only when <ref
         column="other_config" key="bond_mode"/> is
-        <code>active-backup</code>.
+        <code>active-backup</code> or if <code>balance-tcp</code> falls back
+        to <code>active-backup</code> (e.g., LACP negotiation fails and
+        <ref column="other_config" key="lacp-fallback-ab"/> is
+        <code>true</code>).
       </column>
 
       <group title="Link Failure Detection">
@@ -5264,16 +5267,21 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           <dt><code>other</code></dt>
           <dd>Allows the controller access to all OpenFlow features.</dd>
           <dt><code>master</code></dt>
-          <dd>Equivalent to <code>other</code>, except that there may be at
-          most one master controller at a time.  When a controller configures
-          itself as <code>master</code>, any existing master is demoted to
-          the <code>slave</code> role.</dd>
+          <dd>
+            Equivalent to <code>other</code>, except that there may be at
+            most one such controller at a time.  If a given controller
+            promotes itself to this role, <code>ovs-vswitchd</code>
+            demotes any existing controller with the role to <code>slave</code>.
+          </dd>
+
           <dt><code>slave</code></dt>
-          <dd>Allows the controller read-only access to OpenFlow features.
-          Attempts to modify the flow table will be rejected with an
-          error.  Slave controllers do not receive OFPT_PACKET_IN or
-          OFPT_FLOW_REMOVED messages, but they do receive OFPT_PORT_STATUS
-          messages.</dd>
+          <dd>
+            Allows the controller read-only access to OpenFlow features.
+            Attempts to modify the flow table will be rejected with an
+            error.  Such controllers do not receive OFPT_PACKET_IN or
+            OFPT_FLOW_REMOVED messages, but they do receive OFPT_PORT_STATUS
+            messages.
+          </dd>
         </dl>
       </column>
 

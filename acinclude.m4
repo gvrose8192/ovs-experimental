@@ -167,10 +167,10 @@ AC_DEFUN([OVS_CHECK_LINUX], [
     AC_MSG_RESULT([$kversion])
 
     if test "$version" -ge 5; then
-       if test "$version" = 5 && test "$patchlevel" -le 5; then
+       if test "$version" = 5 && test "$patchlevel" -le 8; then
           : # Linux 5.x
        else
-          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 5.5.x is not supported (please refer to the FAQ for advice)])
+          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 5.8.x is not supported (please refer to the FAQ for advice)])
        fi
     elif test "$version" = 4; then
        : # Linux 4.x
@@ -631,6 +631,9 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [OVS_DEFINE([HAVE_UPSTREAM_STATIC_KEY])])
   OVS_GREP_IFELSE([$KSRC/include/linux/jump_label.h], [DEFINE_STATIC_KEY_FALSE],
                   [OVS_DEFINE([HAVE_DEFINE_STATIC_KEY])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/jump_label.h],
+                  [DECLARE_STATIC_KEY_FALSE],
+                  [OVS_DEFINE([HAVE_DECLARE_STATIC_KEY])])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/etherdevice.h], [eth_hw_addr_random])
   OVS_GREP_IFELSE([$KSRC/include/linux/etherdevice.h], [ether_addr_copy])
