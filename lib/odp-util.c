@@ -3971,7 +3971,7 @@ format_odp_tun_attr(const struct nlattr *attr, const struct nlattr *mask_attr,
         case OVS_TUNNEL_KEY_ATTR_GTPU_OPTS:
             ds_put_cstr(ds, "gtpu(");
             format_odp_tun_gtpu_opt(a, ma, ds, verbose);
-            ds_put_cstr(ds, ")");
+            ds_put_cstr(ds, "),");
             break;
         case __OVS_TUNNEL_KEY_ATTR_MAX:
         default:
@@ -5186,8 +5186,8 @@ scan_gtpu_metadata(const char *s,
                    struct gtpu_metadata *mask)
 {
     const char *s_base = s;
-    uint8_t flags, flags_ma;
-    uint8_t msgtype, msgtype_ma;
+    uint8_t flags = 0, flags_ma = 0;
+    uint8_t msgtype = 0, msgtype_ma = 0;
     int len;
 
     if (!strncmp(s, "flags=", 6)) {
