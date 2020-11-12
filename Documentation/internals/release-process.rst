@@ -75,16 +75,48 @@ Scheduling`_ for the timing of each stage:
    and so on.  The process is the same for these additional release as for a .0
    release.
 
-At most two release branches are formally maintained at any given time: the
-latest release and the latest release designed as LTS.  An LTS release is one
-that the OVS project has designated as being maintained for a longer period of
-time.  Currently, an LTS release is maintained until the next LTS is chosen.
-There is not currently a strict guideline on how often a new LTS release is
-chosen, but so far it has been about every 2 years.  That could change based on
-the current state of OVS development.  For example, we do not want to designate
-a new release as LTS that includes disruptive internal changes, as that may
-make it harder to support for a longer period of time.  Discussion about
-choosing the next LTS release occurs on the OVS development mailing list.
+At most three release branches are formally maintained at any given time: the
+latest release, the latest release designed as LTS and a previous LTS release
+during the transition period.  An LTS release is one that the OVS project has
+designated as being maintained for a longer period of time.
+Currently, an LTS release is maintained until the next major release after the
+new LTS is chosen.  This one release time frame is a transition period which is
+intended for users to upgrade from old LTS to new one.
+
+New LTS release is chosen every 2 years.  The process is that current latest
+stable release becomes an LTS release at the same time the next major release
+is out.  That could change based on the current state of OVS development.  For
+example, we do not want to designate a new release as LTS that includes
+disruptive internal changes, as that may make it harder to support for a longer
+period of time.  Discussion about skipping designation of the next LTS release
+occurs on the OVS development mailing list.
+
+LTS designation schedule example (depends on current state of development):
+
++---------+--------------+--------------------------------------------------+
+| Version | Release Date | Actions                                          |
++---------+--------------+--------------------------------------------------+
+| 2.14    | Aug 2020     | 2.14 - new latest stable, 2.13 stable ⟶ new LTS  |
++---------+--------------+--------------------------------------------------+
+| 2.15    | Feb 2021     | 2.12 - new latest stable, 2.5  LTS ⟶ EOL         |
++---------+--------------+--------------------------------------------------+
+| 2.16    | Aug 2021     | 2.16 - new latest stable                         |
++---------+--------------+--------------------------------------------------+
+| 2.17    | Feb 2022     | 2.17 - new latest stable                         |
++---------+--------------+--------------------------------------------------+
+| 2.18    | Aug 2022     | 2.18 - new latest stable, 2.17 stable ⟶ new LTS  |
++---------+--------------+--------------------------------------------------+
+| 2.19    | Feb 2023     | 2.19 - new latest stable, 2.13 LTS ⟶ EOL         |
++---------+--------------+--------------------------------------------------+
+
+While branches other than LTS and the latest release are not formally
+maintained, the OVS project usually provides stable releases for these branches
+for at least 2 years, i.e. stable releases are provided for the last 4
+release branches.  However, these branches may not include all the fixes that
+LTS has in case backporting is not straightforward and developers are not
+willing to spend their time on that (this mostly affects branches that are
+older than the LTS, because backporting to LTS implies backporting to all
+intermediate branches).
 
 Release Numbering
 -----------------

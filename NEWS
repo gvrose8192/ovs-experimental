@@ -6,8 +6,14 @@ Post-v2.14.0
      * New unixctl command 'ovsdb-server/memory-trim-on-compaction on|off'.
        If turned on, ovsdb-server will try to reclaim all the unused memory
        after every DB compaction back to OS.  Disabled by default.
+     * Maximum backlog on RAFT connections limited to 500 messages or 4GB.
+       Once threshold reached, connection is dropped (and re-established).
+       Use the 'cluster/set-backlog-threshold' command to change limits.
    - DPDK:
      * Removed support for vhost-user dequeue zero-copy.
+   - Userspace datapath:
+     * Add the 'pmd' option to "ovs-appctl dpctl/dump-flows", which
+       restricts a flow dump to a single PMD thread if set.
    - The environment variable OVS_UNBOUND_CONF, if set, is now used
      as the DNS resolver's (unbound) configuration file.
    - Linux datapath:
