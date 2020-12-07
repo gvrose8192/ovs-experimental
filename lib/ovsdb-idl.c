@@ -221,7 +221,7 @@ struct ovsdb_idl_db {
     struct uuid last_id;
 };
 
-static void ovsdb_idl_db_track_clear(struct ovsdb_idl_db *);
+static void ovsdb_idl_db_track_clear(struct ovsdb_idl_db *, bool flush_all);
 static void ovsdb_idl_db_add_column(struct ovsdb_idl_db *,
                                     const struct ovsdb_idl_column *);
 static void ovsdb_idl_db_omit(struct ovsdb_idl_db *,
@@ -660,7 +660,7 @@ ovsdb_idl_db_clear(struct ovsdb_idl_db *db)
     ovsdb_idl_row_destroy_postprocess(db);
 
     db->cond_seqno = 0;
-    ovsdb_idl_db_track_clear(db);
+    ovsdb_idl_db_track_clear(db, true);
 
     if (changed) {
         db->change_seqno++;
@@ -1564,6 +1564,7 @@ ovsdb_idl_db_set_condition(struct ovsdb_idl_db *db,
 {
     struct ovsdb_idl_condition *table_cond;
     struct ovsdb_idl_table *table = ovsdb_idl_db_table_from_class(db, tc);
+    unsigned int curr_seqno = db->cond_seqno;
 
     /* Compare the new condition to the last known condition which can be
      * either "new" (not sent yet), "requested" or "acked", in this order.
@@ -1581,14 +1582,11 @@ ovsdb_idl_db_set_condition(struct ovsdb_idl_db *db,
         ovsdb_idl_condition_clone(&table->new_cond, condition);
         db->cond_changed = true;
         poll_immediate_wake();
-        return db->cond_seqno + 1;
-    } else if (table_cond != table->ack_cond) {
-        /* 'condition' was already set but has not been "acked" yet.  The IDL
-         * will be up to date when db->cond_seqno gets incremented. */
-        return db->cond_seqno + 1;
     }
 
-    return db->cond_seqno;
+    /* Conditions will be up to date when we receive replies for already
+     * requested and new conditions, if any. */
+    return curr_seqno + (table->new_cond ? 1 : 0) + (table->req_cond ? 1 : 0);
 }
 
 /* Sets the replication condition for 'tc' in 'idl' to 'condition' and
@@ -1892,29 +1890,37 @@ ovsdb_idl_track_is_set(struct ovsdb_idl_table *table)
 }
 
 /* Returns the first tracked row in table with class 'table_class'
- * for the specified 'idl'. Returns NULL if there are no tracked rows */
+ * for the specified 'idl'. Returns NULL if there are no tracked rows.
+ * Pure orphan rows, i.e. rows that never had any datum, are skipped. */
 const struct ovsdb_idl_row *
 ovsdb_idl_track_get_first(const struct ovsdb_idl *idl,
                           const struct ovsdb_idl_table_class *table_class)
 {
     struct ovsdb_idl_table *table
         = ovsdb_idl_db_table_from_class(&idl->data, table_class);
+    struct ovsdb_idl_row *row;
 
-    if (!ovs_list_is_empty(&table->track_list)) {
-        return CONTAINER_OF(ovs_list_front(&table->track_list), struct ovsdb_idl_row, track_node);
+    LIST_FOR_EACH (row, track_node, &table->track_list) {
+        if (!ovsdb_idl_row_is_orphan(row) || row->tracked_old_datum) {
+            return row;
+        }
     }
     return NULL;
 }
 
 /* Returns the next tracked row in table after the specified 'row'
- * (in no particular order). Returns NULL if there are no tracked rows */
+ * (in no particular order). Returns NULL if there are no tracked rows.
+ * Pure orphan rows, i.e. rows that never had any datum, are skipped.*/
 const struct ovsdb_idl_row *
 ovsdb_idl_track_get_next(const struct ovsdb_idl_row *row)
 {
-    if (row->track_node.next != &row->table->track_list) {
-        return CONTAINER_OF(row->track_node.next, struct ovsdb_idl_row, track_node);
-    }
+    struct ovsdb_idl_table *table = row->table;
 
+    LIST_FOR_EACH_CONTINUE (row, track_node, &table->track_list) {
+        if (!ovsdb_idl_row_is_orphan(row) || row->tracked_old_datum) {
+            return row;
+        }
+    }
     return NULL;
 }
 
@@ -1947,7 +1953,7 @@ ovsdb_idl_track_is_updated(const struct ovsdb_idl_row *row,
  * loop when it is ready to do ovsdb_idl_run() again.
  */
 static void
-ovsdb_idl_db_track_clear(struct ovsdb_idl_db *db)
+ovsdb_idl_db_track_clear(struct ovsdb_idl_db *db, bool flush_all)
 {
     size_t i;
 
@@ -1969,17 +1975,32 @@ ovsdb_idl_db_track_clear(struct ovsdb_idl_db *db)
 
                 ovs_list_remove(&row->track_node);
                 ovs_list_init(&row->track_node);
-                if (ovsdb_idl_row_is_orphan(row) && row->tracked_old_datum) {
+                if (ovsdb_idl_row_is_orphan(row)) {
                     ovsdb_idl_row_unparse(row);
-                    const struct ovsdb_idl_table_class *class =
-                                                        row->table->class_;
-                    for (size_t c = 0; c < class->n_columns; c++) {
-                        ovsdb_datum_destroy(&row->tracked_old_datum[c],
-                                            &class->columns[c].type);
+                    if (row->tracked_old_datum) {
+                        const struct ovsdb_idl_table_class *class =
+                            row->table->class_;
+                        for (size_t c = 0; c < class->n_columns; c++) {
+                            ovsdb_datum_destroy(&row->tracked_old_datum[c],
+                                                &class->columns[c].type);
+                        }
+                        free(row->tracked_old_datum);
+                        row->tracked_old_datum = NULL;
                     }
-                    free(row->tracked_old_datum);
-                    row->tracked_old_datum = NULL;
-                    free(row);
+
+                    /* Rows that were reused as orphan after being processed
+                     * for deletion are still in the table hmap and will be
+                     * cleaned up when their src arcs are removed.  These rows
+                     * will not be reported anymore as "deleted" to IDL
+                     * clients.
+                     *
+                     * The exception is when 'destroy' is explicitly set to
+                     * 'true' which usually happens when the complete IDL
+                     * contents are being flushed.
+                     */
+                    if (flush_all || ovs_list_is_empty(&row->dst_arcs)) {
+                        free(row);
+                    }
                 }
             }
         }
@@ -1994,7 +2015,7 @@ ovsdb_idl_db_track_clear(struct ovsdb_idl_db *db)
 void
 ovsdb_idl_track_clear(struct ovsdb_idl *idl)
 {
-    ovsdb_idl_db_track_clear(&idl->data);
+    ovsdb_idl_db_track_clear(&idl->data, false);
 }
 
 static void
@@ -3219,7 +3240,7 @@ ovsdb_idl_row_clear_old(struct ovsdb_idl_row *row)
 {
     ovs_assert(row->old_datum == row->new_datum);
     if (!ovsdb_idl_row_is_orphan(row)) {
-        if (ovsdb_idl_track_is_set(row->table)) {
+        if (ovsdb_idl_track_is_set(row->table) && !row->tracked_old_datum) {
             row->tracked_old_datum = row->old_datum;
         } else {
             const struct ovsdb_idl_table_class *class = row->table->class_;
