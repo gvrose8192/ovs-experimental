@@ -11,11 +11,15 @@ Post-v2.14.0
        Use the 'cluster/set-backlog-threshold' command to change limits.
    - DPDK:
      * Removed support for vhost-user dequeue zero-copy.
+     * Add support for DPDK 20.11.
    - Userspace datapath:
      * Add the 'pmd' option to "ovs-appctl dpctl/dump-flows", which
        restricts a flow dump to a single PMD thread if set.
      * New 'options:dpdk-vf-mac' field for DPDK interface of VF ports,
        that allows configuring the MAC address of a VF representor.
+     * Add generic IP protocol support to conntrack. With this change, all
+       none UDP, TCP, and ICMP traffic will be treated as general L3
+       traffic, i.e. using 3 tupples.
    - The environment variable OVS_UNBOUND_CONF, if set, is now used
      as the DNS resolver's (unbound) configuration file.
    - Linux datapath:
@@ -27,6 +31,10 @@ Post-v2.14.0
        OpenFlow bundle actions.
    - Support for GitHub Actions based continuous integration builds has been
      added.
+   - Bareudp Tunnel
+     * Bareudp device support is present in linux kernel from version 5.7
+     * Kernel bareudp device is not backported to ovs tree.
+     * Userspace datapath support is not added
 
 
 v2.14.0 - 17 Aug 2020
@@ -122,6 +130,9 @@ v2.13.0 - 14 Feb 2020
    - 'ovs-appctl dpctl/dump-flows' can now show offloaded=partial for
      partially offloaded flows, dp:dpdk for fully offloaded by dpdk, and
      type filter supports new filters: "dpdk" and "partially-offloaded".
+   - Add new argument '--offload-stats' for command
+     'ovs-appctl bridge/dump-flows',
+     so it can display offloaded packets statistics.
 
 v2.12.0 - 03 Sep 2019
 ---------------------
@@ -196,9 +207,6 @@ v2.12.0 - 03 Sep 2019
      * Add support for conntrack zone-based timeout policy.
    - 'ovs-dpctl dump-flows' is no longer suitable for dumping offloaded flows.
      'ovs-appctl dpctl/dump-flows' should be used instead.
-   - Add new argument '--offload-stats' for command
-     'ovs-appctl bridge/dump-flows',
-     so it can display offloaded packets statistics.
    - Add L2 GRE tunnel over IPv6 support.
 
 v2.11.0 - 19 Feb 2019

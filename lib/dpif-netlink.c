@@ -208,7 +208,6 @@ struct dpif_netlink {
     /* Change notification. */
     struct nl_sock *port_notifier; /* vport multicast group subscriber. */
     bool refresh_channels;
-    struct atomic_count n_offloaded_flows;
 };
 
 static void report_loss(struct dpif_netlink *, struct dpif_channel *,
@@ -654,7 +653,6 @@ dpif_netlink_run(struct dpif *dpif_)
 static int
 dpif_netlink_get_stats(const struct dpif *dpif_, struct dpif_dp_stats *stats)
 {
-    struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
     struct dpif_netlink_dp dp;
     struct ofpbuf *buf;
     int error;
@@ -680,7 +678,6 @@ dpif_netlink_get_stats(const struct dpif *dpif_, struct dpif_dp_stats *stats)
         }
         ofpbuf_delete(buf);
     }
-    stats->n_offloaded_flows = atomic_count_get(&dpif->n_offloaded_flows);
     return error;
 }
 
@@ -752,6 +749,9 @@ get_vport_type(const struct dpif_netlink_vport *vport)
     case OVS_VPORT_TYPE_GTPU:
         return "gtpu";
 
+    case OVS_VPORT_TYPE_BAREUDP:
+        return "bareudp";
+
     case OVS_VPORT_TYPE_UNSPEC:
     case __OVS_VPORT_TYPE_MAX:
         break;
@@ -787,6 +787,8 @@ netdev_to_ovs_vport_type(const char *type)
         return OVS_VPORT_TYPE_GRE;
     } else if (!strcmp(type, "gtpu")) {
         return OVS_VPORT_TYPE_GTPU;
+    } else if (!strcmp(type, "bareudp")) {
+        return OVS_VPORT_TYPE_BAREUDP;
     } else {
         return OVS_VPORT_TYPE_UNSPEC;
     }
@@ -2192,9 +2194,6 @@ try_send_to_netdev(struct dpif_netlink *dpif, struct dpif_op *op)
         }
 
         err = parse_flow_put(dpif, put);
-        if (!err && (put->flags & DPIF_FP_CREATE)) {
-            atomic_count_inc(&dpif->n_offloaded_flows);
-        }
         log_flow_put_message(&dpif->dpif, &this_module, put, 0);
         break;
     }
@@ -2209,9 +2208,6 @@ try_send_to_netdev(struct dpif_netlink *dpif, struct dpif_op *op)
                                 dpif_normalize_type(dpif_type(&dpif->dpif)),
                                 del->ufid,
                                 del->stats);
-        if (!err) {
-            atomic_count_dec(&dpif->n_offloaded_flows);
-        }
         log_flow_del_message(&dpif->dpif, &this_module, del, 0);
         break;
     }

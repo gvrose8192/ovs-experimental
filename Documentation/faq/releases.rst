@@ -138,6 +138,7 @@ Q: Are all features available with all datapaths?
     Tunnel - ERSPAN                 4.18           2.10         2.10     NO
     Tunnel - ERSPAN-IPv6            4.18           2.10         2.10     NO
     Tunnel - GTP-U                  NO             NO           2.14     NO
+    Tunnel - Bareudp                5.7            NO           NO       NO
     QoS - Policing                  YES            1.1          2.6      NO
     QoS - Shaping                   YES            1.1          NO       NO
     sFlow                           YES            1.0          1.0      NO
@@ -214,7 +215,7 @@ Q: Are all the DPDK releases that OVS versions work with maintained?
     The latest information about DPDK stable and LTS releases can be found
     at `DPDK stable`_.
 
-.. _DPDK stable: http://dpdk.org/doc/guides/contributing/stable.html
+.. _DPDK stable: http://doc.dpdk.org/guides-20.11/contributing/stable.html
 
 Q: I get an error like this when I configure Open vSwitch:
 

@@ -3100,6 +3100,7 @@ xlate_normal(struct xlate_ctx *ctx)
                 xlate_report(ctx, OFT_DETAIL, "MLD query, flooding");
                 xlate_normal_flood(ctx, in_xbundle, &xvlan);
             }
+            return;
         } else {
             if (is_ip_local_multicast(flow, wc)) {
                 /* RFC4541: section 2.1.2, item 2: Packets with a dst IP
@@ -3222,12 +3223,11 @@ compose_sample_action(struct xlate_ctx *ctx,
     odp_port_t odp_port = ofp_port_to_odp_port(
         ctx->xbridge, ctx->xin->flow.in_port.ofp_port);
     uint32_t pid = dpif_port_get_pid(ctx->xbridge->dpif, odp_port);
-    size_t cookie_offset = odp_put_userspace_action(pid, cookie,
-                                                    sizeof *cookie,
-                                                    tunnel_out_port,
-                                                    include_actions,
-                                                    ctx->odp_actions);
-
+    size_t cookie_offset;
+    int res = odp_put_userspace_action(pid, cookie, sizeof *cookie,
+                                       tunnel_out_port, include_actions,
+                                       ctx->odp_actions, &cookie_offset);
+    ovs_assert(res == 0);
     if (is_sample) {
         nl_msg_end_nested(ctx->odp_actions, actions_offset);
         nl_msg_end_nested(ctx->odp_actions, sample_offset);
@@ -3573,6 +3573,7 @@ propagate_tunnel_data_to_flow(struct xlate_ctx *ctx, struct eth_addr dmac,
     case OVS_VPORT_TYPE_VXLAN:
     case OVS_VPORT_TYPE_GENEVE:
     case OVS_VPORT_TYPE_GTPU:
+    case OVS_VPORT_TYPE_BAREUDP:
         nw_proto = IPPROTO_UDP;
         break;
     case OVS_VPORT_TYPE_LISP:
@@ -4831,7 +4832,7 @@ put_controller_user_action(struct xlate_ctx *ctx,
                                              ctx->xin->flow.in_port.ofp_port);
     uint32_t pid = dpif_port_get_pid(ctx->xbridge->dpif, odp_port);
     odp_put_userspace_action(pid, &cookie, sizeof cookie, ODPP_NONE,
-                             false, ctx->odp_actions);
+                             false, ctx->odp_actions, NULL);
 }
 
 static void

@@ -62,8 +62,8 @@ struct ovsdb_idl *ovsdb_idl_create(const char *remote,
                                    bool retry);
 struct ovsdb_idl *ovsdb_idl_create_unconnected(
     const struct ovsdb_idl_class *, bool monitor_everything_by_default);
-void ovsdb_idl_set_remote(struct ovsdb_idl *, const char *, bool);
-void ovsdb_idl_set_shuffle_remotes(struct ovsdb_idl *, bool);
+void ovsdb_idl_set_remote(struct ovsdb_idl *, const char *remote, bool retry);
+void ovsdb_idl_set_shuffle_remotes(struct ovsdb_idl *, bool shuffle);
 void ovsdb_idl_reset_min_index(struct ovsdb_idl *);
 void ovsdb_idl_destroy(struct ovsdb_idl *);
 
@@ -76,7 +76,6 @@ void ovsdb_idl_set_lock(struct ovsdb_idl *, const char *lock_name);
 bool ovsdb_idl_has_lock(const struct ovsdb_idl *);
 bool ovsdb_idl_is_lock_contended(const struct ovsdb_idl *);
 
-const struct uuid  * ovsdb_idl_get_monitor_id(const struct ovsdb_idl *);
 unsigned int ovsdb_idl_get_seqno(const struct ovsdb_idl *);
 bool ovsdb_idl_has_ever_connected(const struct ovsdb_idl *);
 void ovsdb_idl_enable_reconnect(struct ovsdb_idl *);

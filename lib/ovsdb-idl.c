@@ -617,6 +617,14 @@ ovsdb_idl_destroy(struct ovsdb_idl *idl)
     }
 }
 
+/* By default, or if 'leader_only' is true, when 'idl' connects to a clustered
+ * database, the IDL will avoid servers other than the cluster leader. This
+ * ensures that any data that it reads and reports is up-to-date.  If
+ * 'leader_only' is false, the IDL will accept any server in the cluster, which
+ * means that for read-only transactions it can report and act on stale data
+ * (transactions that modify the database are always serialized even with false
+ * 'leader_only').  Refer to Understanding Cluster Consistency in ovsdb(7) for
+ * more information. */
 void
 ovsdb_idl_set_leader_only(struct ovsdb_idl *idl, bool leader_only)
 {
@@ -710,6 +718,8 @@ ovsdb_idl_send_request(struct ovsdb_idl *idl, struct jsonrpc_msg *request)
     idl->request_id = json_clone(request->id);
     if (idl->session) {
         jsonrpc_session_send(idl->session, request);
+    } else {
+        jsonrpc_msg_destroy(request);
     }
 }
 
@@ -819,9 +829,6 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
         ovsdb_idl_db_parse_monitor_reply(&idl->data, msg->result,
                                          OVSDB_IDL_MM_MONITOR);
         idl->data.change_seqno++;
-        ovsdb_idl_clear(idl);
-        ovsdb_idl_db_parse_update(&idl->data, msg->result,
-                                  OVSDB_IDL_MM_MONITOR);
         break;
 
     case IDL_S_MONITORING:
@@ -4492,8 +4499,10 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
     if (!any_updates) {
         txn->status = TXN_UNCHANGED;
         json_destroy(operations);
-    } else if (txn->db->idl->session
-               && !jsonrpc_session_send(
+    } else if (!txn->db->idl->session) {
+        txn->status = TXN_TRY_AGAIN;
+        json_destroy(operations);
+    } else if (!jsonrpc_session_send(
                    txn->db->idl->session,
                    jsonrpc_create_request(
                        "transact", operations, &txn->request_id))) {
@@ -5201,6 +5210,8 @@ ovsdb_idl_set_lock(struct ovsdb_idl *idl, const char *lock_name)
         }
         if (idl->session) {
             jsonrpc_session_send(idl->session, msg);
+        } else {
+            jsonrpc_msg_destroy(msg);
         }
     }
 }
