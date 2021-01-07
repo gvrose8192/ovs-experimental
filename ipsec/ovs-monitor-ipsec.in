@@ -416,19 +416,19 @@ conn prevent_unencrypted_vxlan
 """
 
     auth_tmpl = {"psk": Template("""\
-    left=%defaultroute
+    left=$local_ip
     right=$remote_ip
     authby=secret"""),
                  "pki_remote": Template("""\
-    left=%defaultroute
+    left=$local_ip
     right=$remote_ip
     leftid=@$local_name
     rightid=@$remote_name
-    leftcert="$local_name"
-    rightcert="$remote_name"
+    leftcert="ovs_certkey_$local_name"
+    rightcert="ovs_cert_$remote_name"
     leftrsasigkey=%cert"""),
                  "pki_ca": Template("""\
-    left=%defaultroute
+    left=$local_ip
     right=$remote_ip
     leftid=@$local_name
     rightid=@$remote_name
@@ -625,7 +625,10 @@ conn prevent_unencrypted_vxlan
                 continue
 
             conn = m.group(1)
-            m = re.match(r"(.*)(-in-\d+|-out-\d+|-\d+)", conn)
+            m = re.match(r"(.*)(-in-\d+|-out-\d+)", conn)
+            if not m:
+                # GRE connections have format <iface>-<ver>
+                m = re.match(r"(.*)(-\d+)", conn)
             if not m:
                 continue
 
@@ -657,7 +660,8 @@ conn prevent_unencrypted_vxlan
             proc = subprocess.Popen(['certutil', '-L', '-d',
                                     'sql:/etc/ipsec.d/'],
                                     stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE)
+                                    stderr=subprocess.PIPE,
+                                    universal_newlines=True)
             lines = proc.stdout.readlines()
 
             for line in lines:
@@ -686,7 +690,7 @@ conn prevent_unencrypted_vxlan
             if proc.returncode:
                 raise Exception(proc.stderr.read())
         except Exception as e:
-            vlog.err("Failed to import ceretificate into NSS.\n" + str(e))
+            vlog.err("Failed to import certificate into NSS.\n" + str(e))
 
     def _nss_delete_cert(self, name):
         try:
@@ -698,7 +702,7 @@ conn prevent_unencrypted_vxlan
             if proc.returncode:
                 raise Exception(proc.stderr.read())
         except Exception as e:
-            vlog.err("Failed to delete ceretificate from NSS.\n" + str(e))
+            vlog.err("Failed to delete certificate from NSS.\n" + str(e))
 
     def _nss_import_cert_and_key(self, cert, key, name):
         try:
@@ -750,6 +754,7 @@ class IPsecTunnel(object):
 
     unixctl_config_tmpl = Template("""\
   Tunnel Type:    $tunnel_type
+  Local IP:       $local_ip
   Remote IP:      $remote_ip
   SKB mark:       $skb_mark
   Local cert:     $certificate
@@ -790,6 +795,7 @@ class IPsecTunnel(object):
         new_conf = {
             "ifname": self.name,
             "tunnel_type": row.type,
+            "local_ip": options.get("local_ip", "%defaultroute"),
             "remote_ip": options.get("remote_ip"),
             "skb_mark": monitor.conf["skb_mark"],
             "certificate": monitor.conf["pki"]["certificate"],
@@ -919,7 +925,7 @@ class IPsecTunnel(object):
 class IPsecMonitor(object):
     """This class monitors and configures IPsec tunnels"""
 
-    def __init__(self, root_prefix, ike_daemon):
+    def __init__(self, root_prefix, ike_daemon, restart):
         self.IPSEC = root_prefix + "/usr/sbin/ipsec"
         self.tunnels = {}
 
@@ -949,7 +955,9 @@ class IPsecMonitor(object):
                 not os.access(self.IPSEC, os.X_OK):
             vlog.err("IKE daemon is not installed in the system.")
 
-        self.ike_helper.restart_ike_daemon()
+        if restart:
+            vlog.info("Restarting IKE daemon")
+            self.ike_helper.restart_ike_daemon()
 
     def is_tunneling_type_supported(self, tunnel_type):
         """Returns True if we know how to configure IPsec for these
@@ -1144,19 +1152,30 @@ def unixctl_refresh(conn, unused_argv, unused_aux):
     conn.reply(None)
 
 
-def unixctl_exit(conn, unused_argv, unused_aux):
+def unixctl_exit(conn, argv, unused_aux):
     global monitor
     global exiting
+    ret = None
     exiting = True
+    cleanup = True
 
-    # Make sure persistent global states are cleared
-    monitor.update_conf([None, None, None, None], None)
-    # Make sure persistent tunnel states are cleared
-    for tunnel in monitor.tunnels.keys():
-        monitor.del_tunnel(tunnel)
-    monitor.run()
+    for arg in argv:
+        if arg == "--no-cleanup":
+            cleanup = False
+        else:
+            cleanup = False
+            exiting = False
+            ret = str("unrecognized parameter: %s" % arg)
 
-    conn.reply(None)
+    if cleanup:
+        # Make sure persistent global states are cleared
+        monitor.update_conf([None, None, None, None], None)
+        # Make sure persistent tunnel states are cleared
+        for tunnel in monitor.tunnels.keys():
+            monitor.del_tunnel(tunnel)
+        monitor.run()
+
+    conn.reply(ret)
 
 
 def main():
@@ -1169,6 +1188,8 @@ def main():
     parser.add_argument("--ike-daemon", metavar="IKE-DAEMON",
                         help="The IKE daemon used for IPsec tunnels"
                         " (either libreswan or strongswan).")
+    parser.add_argument("--no-restart-ike-daemon", action='store_true',
+                        help="Don't restart the IKE daemon on startup.")
 
     ovs.vlog.add_args(parser)
     ovs.daemon.add_args(parser)
@@ -1181,7 +1202,8 @@ def main():
 
     root_prefix = args.root_prefix if args.root_prefix else ""
     xfrm = XFRM(root_prefix)
-    monitor = IPsecMonitor(root_prefix, args.ike_daemon)
+    monitor = IPsecMonitor(root_prefix, args.ike_daemon,
+                           not args.no_restart_ike_daemon)
 
     remote = args.database
     schema_helper = ovs.db.idl.SchemaHelper()
@@ -1202,7 +1224,8 @@ def main():
     ovs.unixctl.command_register("tunnels/show", "", 0, 0,
                                  unixctl_show, None)
     ovs.unixctl.command_register("refresh", "", 0, 0, unixctl_refresh, None)
-    ovs.unixctl.command_register("exit", "", 0, 0, unixctl_exit, None)
+    ovs.unixctl.command_register("exit", "[--no-cleanup]", 0, 1,
+                                 unixctl_exit, None)
 
     error, unixctl_server = ovs.unixctl.server.UnixctlServer.create(None)
     if error:
