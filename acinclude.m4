@@ -77,6 +77,7 @@ AC_DEFUN([OVS_CHECK_LINUX], [
 
   if test X"$with_linux" != X; then
     KBUILD=$with_linux
+    AC_MSG_WARN([--with-linux is deprecated and kernel support is limited to 5.8 and below])
   elif test X"$with_l26" != X; then
     KBUILD=$with_l26
     AC_MSG_WARN([--with-l26 is deprecated, please use --with-linux instead])
@@ -349,16 +350,12 @@ AC_DEFUN([OVS_CHECK_DPDK], [
       "shared")
           PKG_CHECK_MODULES([DPDK], [libdpdk], [
               DPDK_INCLUDE="$DPDK_CFLAGS"
-              DPDK_LIB="$DPDK_LIBS"], [
-              DPDK_INCLUDE="-I/usr/local/include/dpdk -I/usr/include/dpdk"
-              DPDK_LIB="-ldpdk"])
+              DPDK_LIB="$DPDK_LIBS"])
               ;;
       "static" | "yes")
           PKG_CHECK_MODULES_STATIC([DPDK], [libdpdk], [
               DPDK_INCLUDE="$DPDK_CFLAGS"
-              DPDK_LIB="$DPDK_LIBS"], [
-              DPDK_INCLUDE="-I/usr/local/include/dpdk -I/usr/include/dpdk"
-              DPDK_LIB="-ldpdk"])
+              DPDK_LIB="$DPDK_LIBS"])
 
           dnl Statically linked private DPDK objects of form
           dnl -l:file.a must be positioned between
@@ -445,6 +442,12 @@ AC_DEFUN([OVS_CHECK_DPDK], [
     # forces in pkg-config since this could override user-specified options.
     # It's enough to have -mssse3 to build with DPDK headers.
     DPDK_INCLUDE=$(echo "$DPDK_INCLUDE" | sed 's/-march=[[^ ]]*//g')
+    # Also stripping out '-mno-avx512f'.  Support for AVX512 will be disabled
+    # if OVS will detect that it's broken.  OVS could be built with a
+    # completely different toolchain that correctly supports AVX512, flags
+    # forced by DPDK only breaks our feature detection mechanism and leads to
+    # build failures: https://github.com/openvswitch/ovs-issues/issues/201
+    DPDK_INCLUDE=$(echo "$DPDK_INCLUDE" | sed 's/-mno-avx512f//g')
     OVS_CFLAGS="$OVS_CFLAGS $DPDK_INCLUDE"
     OVS_ENABLE_OPTION([-mssse3])
 

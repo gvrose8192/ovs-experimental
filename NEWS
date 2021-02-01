@@ -1,6 +1,18 @@
-Post-v2.14.0
+Post-v2.15.0
+---------------------
+
+
+v2.15.0 - xx xxx xxxx
 ---------------------
    - OVSDB:
+     * Changed format in which ovsdb transactions are stored in database files.
+       Now each transaction contains diff of data instead of the whole new
+       value of a column.
+       New ovsdb-server process will be able to read old database format, but
+       old processes will *fail* to read database created by the new one.
+       For cluster and active-backup service models follow upgrade instructions
+       in 'Upgrading from version 2.14 and earlier to 2.15 and later' section
+       of ovsdb(7).
      * New unixctl command 'ovsdb-server/get-db-storage-status' to show the
        status of the storage that's backing a database.
      * New unixctl command 'ovsdb-server/memory-trim-on-compaction on|off'.
@@ -20,6 +32,9 @@ Post-v2.14.0
      * Add generic IP protocol support to conntrack. With this change, all
        none UDP, TCP, and ICMP traffic will be treated as general L3
        traffic, i.e. using 3 tupples.
+     * Add parameters 'pmd-auto-lb-load-threshold' and
+       'pmd-auto-lb-improvement-threshold' to configure PMD auto load balance
+       behaviour.
    - The environment variable OVS_UNBOUND_CONF, if set, is now used
      as the DNS resolver's (unbound) configuration file.
    - Linux datapath:
@@ -43,6 +58,11 @@ Post-v2.14.0
        tearing down IPsec tunnels.
      * Add option '--no-restart-ike-daemon' to allow ovs-monitor-ipsec to start
        without restarting ipsec daemon.
+   - Building the Linux kernel module from the OVS source tree is deprecated
+     * Support for the Linux kernel is capped at version 5.8
+     * Only bug fixes for the Linux OOT kernel module will be accepted.
+     * The Linux kernel module will be fully removed from the OVS source tree
+       in OVS branch 2.18
 
 
 v2.14.0 - 17 Aug 2020
