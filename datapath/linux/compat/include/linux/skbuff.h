@@ -278,7 +278,9 @@ static inline void skb_clear_hash(struct sk_buff *skb)
 #ifdef HAVE_RXHASH
 	skb->rxhash = 0;
 #endif
-	skb->l4_hash = 0;
+#if defined(HAVE_L4_RXHASH)
+	skb->l4_rxhash = 0;
+#endif
 }
 #endif
 
@@ -369,7 +371,7 @@ static inline void skb_pop_mac_header(struct sk_buff *skb)
 #ifndef HAVE_SKB_CLEAR_HASH_IF_NOT_L4
 static inline void skb_clear_hash_if_not_l4(struct sk_buff *skb)
 {
-	if (!skb->l4_hash)
+	if (!skb->l4_rxhash)
 		skb_clear_hash(skb);
 }
 #endif
@@ -463,7 +465,11 @@ __skb_set_hash(struct sk_buff *skb, __u32 hash, bool is_sw, bool is_l4)
 #else
 	skb->hash = hash;
 #endif
+#if defined(HAVE_L4_RXHASH)
+	skb->l4_rxhash = is_l4;
+#else
 	skb->l4_hash = is_l4;
+#endif
 #ifdef HAVE_SW_HASH
 	skb->sw_hash = is_sw;
 #endif
