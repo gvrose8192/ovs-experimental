@@ -134,7 +134,8 @@ FUZZ_REGRESSION_TESTS = \
 	tests/fuzz-regression/ofp_print_fuzzer-5722747668791296 \
 	tests/fuzz-regression/ofp_print_fuzzer-6285128790704128 \
 	tests/fuzz-regression/ofp_print_fuzzer-6470117922701312 \
-	tests/fuzz-regression/ofp_print_fuzzer-6502620041576448
+	tests/fuzz-regression/ofp_print_fuzzer-6502620041576448 \
+	tests/fuzz-regression/ofp_print_fuzzer-6540965472632832
 $(srcdir)/tests/fuzz-regression-list.at: tests/automake.mk
 	$(AM_V_GEN)for name in $(FUZZ_REGRESSION_TESTS); do \
             basename=`echo $$name | sed 's,^.*/,,'`; \
@@ -189,6 +190,7 @@ check_SCRIPTS += tests/atlocal
 
 TESTSUITE = $(srcdir)/tests/testsuite
 TESTSUITE_PATCH = $(srcdir)/tests/testsuite.patch
+TESTSUITE_DIR = $(abs_top_builddir)/tests/testsuite.dir
 SYSTEM_KMOD_TESTSUITE = $(srcdir)/tests/system-kmod-testsuite
 SYSTEM_USERSPACE_TESTSUITE = $(srcdir)/tests/system-userspace-testsuite
 SYSTEM_TSO_TESTSUITE = $(srcdir)/tests/system-tso-testsuite
@@ -202,7 +204,9 @@ AUTOTEST_PATH = utilities:vswitchd:ovsdb:vtep:tests:$(PTHREAD_WIN32_DIR_DLL):$(S
 
 check-local:
 	set $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH); \
-	"$$@" $(TESTSUITEFLAGS) || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
+	"$$@" $(TESTSUITEFLAGS) || \
+	(test -z "$$(find $(TESTSUITE_DIR) -name 'asan.*')" && \
+	 test X'$(RECHECK)' = Xyes && "$$@" --recheck)
 
 # Python Coverage support.
 # Requires coverage.py http://nedbatchelder.com/code/coverage/.
