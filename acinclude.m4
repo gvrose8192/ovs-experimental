@@ -1151,6 +1151,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [__skb_set_hash])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [sw_hash])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_get_hash_raw])
+  OVS_GREP_IFELSE([$KSRC/include/linux/mm.h], [kvfree])
 
   if cmp -s datapath/linux/kcompat.h.new \
             datapath/linux/kcompat.h >/dev/null 2>&1; then
