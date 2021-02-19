@@ -276,10 +276,14 @@ int rpl_skb_zerocopy(struct sk_buff *to, struct sk_buff *from, int len,
 static inline void skb_clear_hash(struct sk_buff *skb)
 {
 #ifdef HAVE_RXHASH
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(7,2)
 	skb->rxhash = 0;
 #endif
-#if defined(HAVE_L4_RXHASH)
+#endif
+#if defined(HAVE_L4_RXHASH) && !defined(HAVE_L4_HASH)
 	skb->l4_rxhash = 0;
+#else
+	skb->l4_hash = 0;
 #endif
 }
 #endif
@@ -461,11 +465,13 @@ static inline void
 __skb_set_hash(struct sk_buff *skb, __u32 hash, bool is_sw, bool is_l4)
 {
 #ifdef HAVE_RXHASH
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(7,2)
 	skb->rxhash = hash;
 #else
 	skb->hash = hash;
 #endif
-#if defined(HAVE_L4_RXHASH)
+#endif
+#if defined(HAVE_L4_RXHASH) && !defined(HAVE_L4_HASH)
 	skb->l4_rxhash = is_l4;
 #else
 	skb->l4_hash = is_l4;
@@ -480,9 +486,11 @@ __skb_set_hash(struct sk_buff *skb, __u32 hash, bool is_sw, bool is_l4)
 static inline __u32 skb_get_hash_raw(const struct sk_buff *skb)
 {
 #ifdef HAVE_RXHASH
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(7,2)
 	return skb->rxhash;
 #else
 	return skb->hash;
+#endif
 #endif
 }
 #endif

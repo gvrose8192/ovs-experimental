@@ -529,7 +529,7 @@ static int queue_userspace_packet(struct datapath *dp, struct sk_buff *skb,
 		hash |= OVS_PACKET_HASH_SW_BIT;
 #endif
 
-#ifdef HAVE_L4_RXHASH
+#if defined(HAVE_L4_RXHASH) && !defined(HAVE_L4_HASH)
 	if (skb->l4_rxhash)
 #else
 	if (skb->l4_hash)
