@@ -889,6 +889,8 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [OVS_DEFINE([HAVE_SKB_ZEROCOPY])])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [u8.*l4_rxhash],
                   [OVS_DEFINE([HAVE_L4_RXHASH])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [u8.*l4_hash],
+                  [OVS_DEFINE([HAVE_L4_HASH])])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_ensure_writable])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_vlan_pop])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [__skb_vlan_pop])
