@@ -10,6 +10,12 @@ extern void *vmalloc_node(unsigned long size, int node);
 #else
 extern void *kvmalloc_node(size_t size, gfp_t flags, int node);
 #endif /* HAVE_KVMALLOC_NODE */
+
+/* RHEL 7.0 and 7.1 need this include for use of __GFP_ZERO below */
+#ifndef __GFP_ZERO
+#include <linux/gfp.h>
+#endif
+
 static inline void *kvmalloc(size_t size, gfp_t flags)
 {
 	return kvmalloc_node(size, flags, NUMA_NO_NODE);
@@ -40,5 +46,29 @@ static inline void *kvcalloc(size_t n, size_t size, gfp_t flags)
 
 #endif
 #include_next <linux/mm.h>
+/*
+ * Under normal circumstances the proper way to fix this up permanently
+ * would be to pull in some new headers and C modules.  It's a huge overkill
+ * for a few lines of code needed to fix up builds for RHEL 7.0 and 7.1
+ * Recently a new requirement was added to support these releases for
+ * internal builds only.
+ * https://jira.eng.vmware.com/browse/CPDP-6122
+ */
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(7,2)
+#ifndef GENMASK
+#define GENMASK(h, l) \
+	(((~0UL) << (l)) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
+#endif
+#include <linux/slab.h>
+static inline void rpl_kvfree(const void *addr)
+{
+	if (is_vmalloc_addr(addr))
+		vfree(addr);
+	else
+		kfree(addr);
+}
+#define kvfree rpl_kvfree
+#endif
+
 #endif /* OVS_MM_H */
 
