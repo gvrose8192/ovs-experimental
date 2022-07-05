@@ -9,17 +9,13 @@ jobs:
         automake libtool gcc bc libjemalloc1 libjemalloc-dev    \
         libssl-dev llvm-dev libelf-dev libnuma-dev libpcap-dev  \
         ninja-build selinux-policy-dev
-      deb_dependencies: |
-        linux-headers-$(uname -r) build-essential fakeroot devscripts equivs
       AFXDP:       ${{ matrix.afxdp }}
       ASAN:        ${{ matrix.asan }}
       UBSAN:       ${{ matrix.ubsan }}
       CC:          ${{ matrix.compiler }}
-      DEB_PACKAGE: ${{ matrix.deb_package }}
       DPDK:        ${{ matrix.dpdk }}
       DPDK_SHARED: ${{ matrix.dpdk_shared }}
       KERNEL:      ${{ matrix.kernel }}
-      KERNEL_LIST: ${{ matrix.kernel_list }}
       LIBS:        ${{ matrix.libs }}
       M32:         ${{ matrix.m32 }}
       OPTS:        ${{ matrix.opts }}
@@ -40,14 +36,11 @@ jobs:
 
           - compiler:     gcc
             testsuite:    test
-            kernel:       3.16
           - compiler:     clang
             testsuite:    test
-            kernel:       3.16
             asan:         asan
           - compiler:     clang
             testsuite:    test
-            kernel:       3.16
             ubsan:        ubsan
 
           - compiler:     gcc
@@ -70,16 +63,6 @@ jobs:
           - compiler:     clang
             testsuite:    test
             libs:         -ljemalloc
-
-          - compiler:     gcc
-            kernel_list:  5.8 5.5 5.4 4.19
-          - compiler:     clang
-            kernel_list:  5.8 5.5 5.4 4.19
-
-          - compiler:     gcc
-            kernel_list:  4.14 4.9 4.4 3.16
-          - compiler:     clang
-            kernel_list:  4.14 4.9 4.4 3.16
 
           - compiler:     gcc
             afxdp:        afxdp
@@ -110,9 +93,6 @@ jobs:
           - compiler:     gcc
             m32:          m32
             opts:         --disable-ssl
-
-          - compiler:     gcc
-            deb_package:  deb
 
     steps:
     - name: checkout
