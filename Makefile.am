@@ -481,7 +481,6 @@ include ipsec/automake.mk
 include vswitchd/automake.mk
 include ovsdb/automake.mk
 include rhel/automake.mk
-include xenserver/automake.mk
 include python/automake.mk
 include tutorial/automake.mk
 include vtep/automake.mk
