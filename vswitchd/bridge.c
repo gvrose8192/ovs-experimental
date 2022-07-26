@@ -70,7 +70,6 @@
 #include "util.h"
 #include "unixctl.h"
 #include "lib/vswitch-idl.h"
-#include "xenserver.h"
 #include "vlan-bitmap.h"
 
 VLOG_DEFINE_THIS_MODULE(bridge);
@@ -2391,29 +2390,7 @@ bridge_pick_datapath_id(struct bridge *br,
         return dpid;
     }
 
-    if (!hw_addr_iface) {
-        /*
-         * A purely internal bridge, that is, one that has no non-virtual
-         * network devices on it at all, is difficult because it has no
-         * natural unique identifier at all.
-         *
-         * When the host is a XenServer, we handle this case by hashing the
-         * host's UUID with the name of the bridge.  Names of bridges are
-         * persistent across XenServer reboots, although they can be reused if
-         * an internal network is destroyed and then a new one is later
-         * created, so this is fairly effective.
-         *
-         * When the host is not a XenServer, we punt by using a random MAC
-         * address on each run.
-         */
-        const char *host_uuid = xenserver_get_host_uuid();
-        if (host_uuid) {
-            char *combined = xasprintf("%s,%s", host_uuid, br->name);
-            dpid = dpid_from_hash(combined, strlen(combined));
-            free(combined);
-            return dpid;
-        }
-    }
+    /* Use random MAC address for bridge identifier */
 
     return eth_addr_to_uint64(bridge_ea);
 }
